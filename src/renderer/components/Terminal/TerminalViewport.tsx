@@ -2,9 +2,14 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { SdkLineBuffer } from '@shared/SdkLineBuffer'
+import type { SessionKind } from '@shared/types'
+
+// Global registry so other modules (useKeyboard) can access terminal instances
+export const terminalRegistry = new Map<string, Terminal>()
 
 interface TerminalViewportProps {
-  sessions: { id: string }[]
+  sessions: { id: string; kind: SessionKind }[]
   activeId: string | null
   fontSize: number
 }
@@ -32,6 +37,7 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
         inst.terminal.dispose()
         inst.div.remove()
         instances.delete(id)
+        terminalRegistry.delete(id)
       }
     }
 
@@ -70,32 +76,85 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
 
         terminal.open(div)
 
-        // Attach to PTY data stream
-        window.tangentAPI.terminal.attach(session.id)
-        const unsubData = window.tangentAPI.terminal.onData(session.id, (data: string) => {
-          terminal.write(data)
+        // Intercept app shortcuts BEFORE xterm processes them.
+        // Returning false tells xterm to NOT handle the key event,
+        // allowing the window-level useKeyboard handler to process it.
+        terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          if (!e.ctrlKey) return true
+          const key = e.key.toLowerCase()
+          // Ctrl+V: handled by useKeyboard (clipboard paste to PTY)
+          if (key === 'v' && !e.shiftKey && !e.altKey) return false
+          // Ctrl+C: copy selection if any, otherwise send SIGINT (or clear line for SDK)
+          if (key === 'c' && !e.shiftKey && !e.altKey && e.type === 'keydown') {
+            const selection = terminal.getSelection()
+            if (selection) {
+              navigator.clipboard.writeText(selection).catch(() => {})
+              terminal.clearSelection()
+              return false
+            }
+            return true // No selection — let xterm handle (PTY: ^C, SDK: line buffer handles it)
+          }
+          // Let xterm ignore these — they're app shortcuts
+          if (key === 'b' || key === 'n' || key === 'w' || key === 'tab' ||
+              key === '=' || key === '+' || key === '-' || key === '0') {
+            return false
+          }
+          // Ctrl+Shift+1-9 for agent quick-launch
+          if (e.shiftKey && /^[1-9!@#$%^&*(]$/.test(e.key)) {
+            return false
+          }
+          return true
         })
 
-        // Forward user input to PTY
-        const onDataDisposable = terminal.onData((data) => {
-          window.tangentAPI.terminal.write(session.id, data)
-        })
+        const cleanupFns: (() => void)[] = []
 
-        // Report resize
-        const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
-          window.tangentAPI.terminal.resize(session.id, cols, rows)
-        })
+        if (session.kind === 'copilot-sdk') {
+          // === SDK session: line-buffered input, SDK output ===
+          const sessionId = session.id
+          const lineBuffer = new SdkLineBuffer(
+            (data) => terminal.write(data),
+            (line) => window.tangentAPI.sdk.sendMessage(sessionId, line)
+          )
+
+          // SDK output → terminal display
+          const unsubSdkOutput = window.tangentAPI.sdk.onOutput(session.id, (data: string) => {
+            terminal.write(data)
+          })
+          cleanupFns.push(unsubSdkOutput)
+
+          // User keystrokes → line buffer (local echo + send on Enter)
+          const onDataDisposable = terminal.onData((data) => {
+            lineBuffer.handleInput(data)
+          })
+          cleanupFns.push(() => onDataDisposable.dispose())
+        } else {
+          // === PTY session: direct PTY I/O ===
+          window.tangentAPI.terminal.attach(session.id)
+          const unsubData = window.tangentAPI.terminal.onData(session.id, (data: string) => {
+            terminal.write(data)
+          })
+          cleanupFns.push(unsubData)
+
+          // Forward user input to PTY
+          const onDataDisposable = terminal.onData((data) => {
+            window.tangentAPI.terminal.write(session.id, data)
+          })
+          cleanupFns.push(() => onDataDisposable.dispose())
+
+          // Report resize
+          const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
+            window.tangentAPI.terminal.resize(session.id, cols, rows)
+          })
+          cleanupFns.push(() => onResizeDisposable.dispose())
+        }
 
         instances.set(session.id, {
           terminal,
           fitAddon,
           div,
-          cleanup: () => {
-            unsubData()
-            onDataDisposable.dispose()
-            onResizeDisposable.dispose()
-          }
+          cleanup: () => cleanupFns.forEach(fn => fn())
         })
+        terminalRegistry.set(session.id, terminal)
       }
     }
   }, [sessions, fontSize])

@@ -12,14 +12,21 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
   const [name, setName] = useState(initialValues?.name ?? '')
   const [command, setCommand] = useState(initialValues?.command ?? '')
   const [argsStr, setArgsStr] = useState(initialValues?.args.join(' ') ?? '')
-  const [launchTarget, setLaunchTarget] = useState<'currentTab' | 'newTab'>(
+  const [launchTarget, setLaunchTarget] = useState<'currentTab' | 'newTab' | 'path'>(
     initialValues?.launchTarget ?? 'currentTab'
   )
+  const [cwdPath, setCwdPath] = useState(initialValues?.cwdPath ?? '')
+
+  const handleBrowseFolder = async () => {
+    const selected = await (window as any).tangentAPI.dialog.openFolder()
+    if (selected) setCwdPath(selected)
+  }
 
   const handleSave = () => {
     const trimmedName = name.trim()
     const trimmedCommand = command.trim()
     if (!trimmedName || !trimmedCommand) return
+    if (launchTarget === 'path' && !cwdPath.trim()) return
 
     const args = argsStr.trim() ? argsStr.trim().split(/\s+/) : []
 
@@ -29,7 +36,8 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
       command: trimmedCommand,
       args,
       cwdMode: 'activeSession',
-      launchTarget
+      launchTarget,
+      ...(launchTarget === 'path' && cwdPath.trim() ? { cwdPath: cwdPath.trim() } : {})
     }
 
     if (initialValues?.env) {
@@ -65,7 +73,7 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Claude Code"
+          placeholder="e.g. Copilot CLI"
           className={inputClass}
           style={inputStyle}
         />
@@ -80,7 +88,7 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
           type="text"
           value={command}
           onChange={(e) => setCommand(e.target.value)}
-          placeholder="e.g. claude"
+          placeholder="e.g. copilot"
           className={inputClass}
           style={inputStyle}
         />
@@ -108,7 +116,7 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
         </label>
         <select
           value={launchTarget}
-          onChange={(e) => setLaunchTarget(e.target.value as 'currentTab' | 'newTab')}
+          onChange={(e) => setLaunchTarget(e.target.value as 'currentTab' | 'newTab' | 'path')}
           className="w-full px-2 py-1 text-sm rounded border border-[var(--bg-hover)] outline-none focus:border-[var(--accent)]"
           style={{
             background: 'var(--bg-tertiary)',
@@ -118,8 +126,36 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
         >
           <option value="currentTab">Current Tab</option>
           <option value="newTab">New Tab</option>
+          <option value="path">Path</option>
         </select>
       </div>
+
+      {/* Folder Path (when launch target is 'path') */}
+      {launchTarget === 'path' && (
+        <div className="mb-3">
+          <label className="text-xs mb-0.5 block" style={{ color: 'var(--text-secondary)' }}>
+            Folder Path
+          </label>
+          <div className="flex gap-1">
+            <input
+              type="text"
+              value={cwdPath}
+              onChange={(e) => setCwdPath(e.target.value)}
+              placeholder="Type or browse for a folder..."
+              className={inputClass + ' flex-1'}
+              style={inputStyle}
+            />
+            <button
+              type="button"
+              onClick={handleBrowseFolder}
+              className="px-2 py-1 text-sm rounded border border-[var(--bg-hover)] hover:bg-[var(--bg-hover)] transition-colors shrink-0"
+              style={{ color: 'var(--text-secondary)' }}
+            >
+              Browse
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Buttons */}
       <div className="flex gap-2">

@@ -11,8 +11,8 @@
   --text-secondary: #8b949e;
   --text-muted: #484f58;
   --accent: #58a6ff;
-  --running: #00ff44;
-  --error: #ff4477;
+  --running: #ff4477;
+  --error: #ff4444;
   --idle: #ffb800;
 
   --font-mono: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;

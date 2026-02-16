@@ -1,6 +1,7 @@
 import { v4 as uuid } from 'uuid'
 import path from 'path'
 import { SessionStore } from './SessionStore'
+import { SdkSessionManager } from './SdkSessionManager'
 import { PtyManager } from '../pty/PtyManager'
 import { StatusEngine } from '../status/StatusEngine'
 import { ExternalScanner } from './ExternalScanner'
@@ -10,6 +11,7 @@ export class SessionManager {
   private activeSessionId: string | null = null
   private engines = new Map<string, StatusEngine>()
   private externalScanner = new ExternalScanner()
+  private _sdkManager: SdkSessionManager | null = null
 
   constructor(
     private store: SessionStore,
@@ -18,7 +20,7 @@ export class SessionManager {
     // Wire PTY data events to the corresponding StatusEngine
     this.ptyManager.on('data', (ptyId: string, data: string) => {
       const session = this.findByPtyId(ptyId)
-      if (session) {
+      if (session && session.kind !== 'copilot-sdk') {
         const engine = this.engines.get(session.id)
         engine?.feed(data)
       }
@@ -27,11 +29,20 @@ export class SessionManager {
     // Wire PTY exit events to the corresponding StatusEngine
     this.ptyManager.on('exit', (ptyId: string, exitCode: number) => {
       const session = this.findByPtyId(ptyId)
-      if (session) {
+      if (session && session.kind !== 'copilot-sdk') {
         const engine = this.engines.get(session.id)
         engine?.handlePtyExit(exitCode)
       }
     })
+  }
+
+  /** Set the SDK session manager (injected after construction to avoid circular deps). */
+  setSdkManager(sdkManager: SdkSessionManager): void {
+    this._sdkManager = sdkManager
+  }
+
+  get sdkManager(): SdkSessionManager | null {
+    return this._sdkManager
   }
 
   create(cwd?: string): Session {
@@ -44,6 +55,7 @@ export class SessionManager {
 
     const session: Session = {
       id: sessionId,
+      kind: 'shell',
       agentType: 'shell',
       name: folderName,
       folderName,
@@ -71,6 +83,9 @@ export class SessionManager {
     const session = this.store.get(sessionId)
     if (!session) return
 
+    // Clean up SDK connection if attached
+    this._sdkManager?.closeSession(sessionId)
+
     // Dispose the StatusEngine before killing the PTY
     const engine = this.engines.get(sessionId)
     if (engine) {
@@ -78,7 +93,10 @@ export class SessionManager {
       this.engines.delete(sessionId)
     }
 
-    this.ptyManager.kill(session.ptyId)
+    if (session.ptyId) {
+      this.ptyManager.kill(session.ptyId)
+    }
+
     this.store.remove(sessionId)
 
     if (this.activeSessionId === sessionId) {

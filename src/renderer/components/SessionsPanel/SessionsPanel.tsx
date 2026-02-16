@@ -10,11 +10,17 @@ interface SessionsPanelProps {
   onClose: (id: string) => void
   onCreate: () => void
   onRename: (id: string, name: string) => void
+  width: number
+  onWidthChange: (w: number) => void
+  onCollapse: () => void
 }
+
+const MIN_WIDTH = 140
+const MAX_WIDTH = 500
 
 const RECENT_THRESHOLD_MS = 48 * 60 * 60 * 1000 // 48 hours
 
-export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate, onRename }: SessionsPanelProps) {
+export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate, onRename, width, onWidthChange, onCollapse }: SessionsPanelProps) {
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1)
   const [filterOpen, setFilterOpen] = useState(false)
   const [filterValue, setFilterValue] = useState('')
@@ -23,6 +29,33 @@ export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate,
   const [showOlder, setShowOlder] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragStartRef = useRef({ x: 0, startWidth: 0 })
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+    dragStartRef.current = { x: e.clientX, startWidth: width }
+
+    const handleMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - dragStartRef.current.x
+      const newWidth = dragStartRef.current.startWidth + delta
+      if (newWidth < MIN_WIDTH / 2) {
+        onCollapse()
+        cleanup()
+        return
+      }
+      onWidthChange(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth)))
+    }
+    const handleUp = () => cleanup()
+    const cleanup = () => {
+      setIsDragging(false)
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }, [width, onWidthChange, onCollapse])
 
   // Filter sessions
   const filteredSessions = useMemo(() => {
@@ -172,11 +205,12 @@ export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate,
   )
 
   return (
+    <div className="flex h-full shrink-0" style={{ width: `${width}px` }}>
     <div
       ref={panelRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      className="w-[240px] min-w-[240px] h-full border-r border-[var(--bg-hover)] flex flex-col outline-none"
+      className="flex-1 min-w-0 h-full flex flex-col outline-none"
       style={{ background: 'var(--bg-secondary)' }}
     >
       {/* Header */}
@@ -239,6 +273,16 @@ export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate,
       >
         + New Session
       </button>
+    </div>
+    {/* Drag handle */}
+    <div
+      onMouseDown={handleDragStart}
+      className="w-1 h-full shrink-0 hover:bg-[var(--accent)] transition-colors"
+      style={{
+        cursor: 'col-resize',
+        background: isDragging ? 'var(--accent)' : 'var(--bg-hover)'
+      }}
+    />
     </div>
   )
 }

@@ -22,12 +22,12 @@ export function mapStatusToUI(status: SessionStatus): UIStatusIndicator {
         label: 'running',
         dotVisible: true,
         dotColor: '--running',
-        dotAnimation: 'pulse-slow',
+        dotAnimation: 'none',
         barColor: '--running',
-        bgTint: 'rgba(0, 255, 68, 0.04)',
-        bgTintSelected: 'rgba(0, 255, 68, 0.10)',
-        bgTintHover: 'rgba(0, 255, 68, 0.07)',
-        glowShadow: 'inset 0 0 12px rgba(0, 255, 68, 0.06), 0 0 8px rgba(0, 255, 68, 0.03)'
+        bgTint: 'rgba(255, 68, 119, 0.04)',
+        bgTintSelected: 'rgba(255, 68, 119, 0.10)',
+        bgTintHover: 'rgba(255, 68, 119, 0.07)',
+        glowShadow: 'inset 0 0 12px rgba(255, 68, 119, 0.06), 0 0 8px rgba(255, 68, 119, 0.03)'
       }
 
     case 'agent_launching':
@@ -52,10 +52,10 @@ export function mapStatusToUI(status: SessionStatus): UIStatusIndicator {
         dotColor: '--error',
         dotAnimation: 'pulse-fast',
         barColor: '--error',
-        bgTint: 'rgba(255, 68, 119, 0.04)',
-        bgTintSelected: 'rgba(255, 68, 119, 0.10)',
-        bgTintHover: 'rgba(255, 68, 119, 0.07)',
-        glowShadow: 'inset 0 0 12px rgba(255, 68, 119, 0.06), 0 0 8px rgba(255, 68, 119, 0.03)'
+        bgTint: 'rgba(255, 68, 68, 0.04)',
+        bgTintSelected: 'rgba(255, 68, 68, 0.10)',
+        bgTintHover: 'rgba(255, 68, 68, 0.07)',
+        glowShadow: 'inset 0 0 12px rgba(255, 68, 68, 0.06), 0 0 8px rgba(255, 68, 68, 0.03)'
       }
   }
 }

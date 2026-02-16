@@ -5,7 +5,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({
+      exclude: ['@github/copilot-sdk', 'vscode-jsonrpc']
+    })],
     resolve: {
       alias: {
         '@shared': resolve('src/shared')

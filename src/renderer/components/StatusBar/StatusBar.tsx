@@ -31,17 +31,19 @@ function truncateRight(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 1) + '\u2026'
 }
 
+/** Format token counts for compact display. */
+function formatTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`
+  return String(count)
+}
+
 export function StatusBar({ sessions, activeSession }: StatusBarProps) {
   const uiStatus = useMemo(
     () => (activeSession ? mapStatusToUI(activeSession.status) : null),
     [activeSession]
   )
 
-  // Count non-running sessions (those that are still alive, i.e., not exited and not shell_ready)
-  const nonRunningCount = useMemo(
-    () => sessions.filter(s => s.status !== 'exited' && s.status !== 'shell_ready').length,
-    [sessions]
-  )
 
   const dotStyle = useMemo(() => {
     if (!uiStatus || !uiStatus.dotVisible || !uiStatus.dotColor) return undefined
@@ -50,6 +52,32 @@ export function StatusBar({ sessions, activeSession }: StatusBarProps) {
       animation: uiStatus.dotAnimation !== 'none' ? `${uiStatus.dotAnimation} 2s ease-in-out infinite` : undefined
     }
   }, [uiStatus])
+
+  // Group sessions by dot color for the session counter
+  const sessionGroups = useMemo(() => {
+    const groups: { color: string; cssVar: string; count: number }[] = []
+    const counts = new Map<string, number>()
+
+    for (const s of sessions) {
+      const ui = mapStatusToUI(s.status)
+      const key = ui.dotVisible && ui.dotColor ? ui.dotColor : 'none'
+      counts.set(key, (counts.get(key) || 0) + 1)
+    }
+
+    // Order: running (pink), idle (yellow), error (green), shell (no dot)
+    const order = ['--running', '--idle', '--error', 'none'] as const
+    for (const key of order) {
+      const count = counts.get(key)
+      if (count) {
+        groups.push({
+          color: key,
+          cssVar: key === 'none' ? 'var(--text-muted)' : `var(${key})`,
+          count
+        })
+      }
+    }
+    return groups
+  }, [sessions])
 
   const agentLabel = activeSession
     ? AGENT_LABELS[activeSession.agentType] ?? activeSession.agentType
@@ -68,18 +96,15 @@ export function StatusBar({ sessions, activeSession }: StatusBarProps) {
       className="h-6 min-h-6 flex items-center px-3 text-xs border-t border-[var(--bg-hover)]"
       style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
     >
-      {/* Left section: status dot + session counts */}
+      {/* Left section: session counts grouped by status color */}
       <div className="flex items-center gap-1.5 shrink-0">
-        {uiStatus?.dotVisible ? (
-          <span style={dotStyle}>{'\u25CF'}</span>
-        ) : (
-          <span style={{ color: 'var(--text-muted)' }}>{'\u25CB'}</span>
-        )}
-        <span>
-          {nonRunningCount} active
-        </span>
-        <span style={{ color: 'var(--text-muted)' }}>/</span>
-        <span>{sessions.length} total</span>
+        {sessionGroups.map((g, i) => (
+          <span key={g.color} className="flex items-center gap-0.5">
+            {i > 0 && <span className="mr-0.5" style={{ color: 'var(--text-muted)' }}>,</span>}
+            <span style={{ color: g.cssVar }}>{g.color === 'none' ? '\u25CB' : '\u25CF'}</span>
+            <span>{g.count}</span>
+          </span>
+        ))}
       </div>
 
       <span className="mx-2" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
@@ -100,12 +125,40 @@ export function StatusBar({ sessions, activeSession }: StatusBarProps) {
       {/* Spacer */}
       <span className="flex-1" />
 
-      {/* Right section: CWD + keyboard hint */}
+      {/* Right section: Metrics (SDK) + VS Code button + CWD + keyboard hint */}
       <div className="flex items-center gap-2 shrink-0">
+        {activeSession?.kind === 'copilot-sdk' && activeSession?.metrics && (
+          <>
+            <span style={{ color: 'var(--text-muted)' }} title="Token usage (input / output)">
+              {formatTokens(activeSession.metrics.inputTokens)}/{formatTokens(activeSession.metrics.outputTokens)}
+            </span>
+            {activeSession.metrics.cost > 0 && (
+              <span style={{ color: 'var(--text-muted)' }} title="Estimated cost">
+                ${activeSession.metrics.cost.toFixed(4)}
+              </span>
+            )}
+            <span className="mx-0.5" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
+          </>
+        )}
+        {activeSession?.folderPath && (
+          <button
+            onClick={() => (window as any).tangentAPI.shell.openInVSCode(activeSession.folderPath)}
+            className="px-1.5 py-0 rounded hover:bg-[var(--bg-hover)] transition-colors"
+            style={{ color: 'var(--text-muted)' }}
+            title={`Open ${activeSession.folderPath} in VS Code Insiders`}
+          >
+            VS Code Insiders
+          </button>
+        )}
         {cwdPath && (
-          <span className="max-w-[200px] truncate" style={{ color: 'var(--text-muted)' }} title={activeSession?.folderPath}>
+          <button
+            onClick={() => activeSession?.folderPath && (window as any).tangentAPI.shell.openInExplorer(activeSession.folderPath)}
+            className="max-w-[200px] truncate hover:underline cursor-pointer"
+            style={{ color: 'var(--text-muted)', background: 'none', border: 'none', padding: 0, font: 'inherit' }}
+            title={`Open ${activeSession?.folderPath} in Explorer`}
+          >
             {cwdPath}
-          </span>
+          </button>
         )}
         <span className="mx-1" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
         <span style={{ color: 'var(--text-muted)' }}>Ctrl+B panels</span>

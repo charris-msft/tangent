@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import type { Session } from '@shared/types'
 import { ZOOM } from '@shared/constants'
+import { terminalRegistry } from '@/components/Terminal/TerminalViewport'
 
 export interface KeyboardConfig {
   createSession: () => void
@@ -52,6 +53,19 @@ export function useKeyboard(config: KeyboardConfig): void {
       if (!e.ctrlKey) return
 
       const key = e.key
+
+      // Ctrl+V: paste from clipboard into active terminal
+      if ((key === 'v' || key === 'V') && !e.shiftKey && !e.altKey) {
+        if (activeId) {
+          e.preventDefault()
+          navigator.clipboard.readText().then(text => {
+            if (text) {
+              window.tangentAPI.terminal.write(activeId, text)
+            }
+          }).catch(() => {})
+        }
+        return
+      }
 
       // Ctrl+B: toggle sessions panel
       if (key === 'b' || key === 'B') {
@@ -167,10 +181,12 @@ export function useKeyboard(config: KeyboardConfig): void {
 
       e.preventDefault()
 
-      const selection = window.getSelection()?.toString() || ''
+      const terminal = activeId ? terminalRegistry.get(activeId) : null
+      const selection = terminal?.getSelection() || ''
       if (selection) {
-        // Copy selected text to clipboard
+        // Copy selected text to clipboard, then clear the highlight
         await navigator.clipboard.writeText(selection)
+        terminal?.clearSelection()
       } else {
         // Paste from clipboard into active terminal
         if (activeId) {
@@ -189,11 +205,12 @@ export function useKeyboard(config: KeyboardConfig): void {
   )
 
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown)
+    // Use capture phase so shortcuts fire before xterm's bubbling handlers
+    window.addEventListener('keydown', handleKeyDown, { capture: true })
     window.addEventListener('contextmenu', handleContextMenu)
 
     return () => {
-      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keydown', handleKeyDown, { capture: true })
       window.removeEventListener('contextmenu', handleContextMenu)
     }
   }, [handleKeyDown, handleContextMenu])

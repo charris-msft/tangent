@@ -6,6 +6,8 @@ import { SessionsPanel } from '@/components/SessionsPanel/SessionsPanel'
 import { TerminalViewport } from '@/components/Terminal/TerminalViewport'
 import { AgentsSidebar } from '@/components/AgentsSidebar/AgentsSidebar'
 import { StatusBar } from '@/components/StatusBar/StatusBar'
+import { PermissionDialog } from '@/components/PermissionDialog'
+import { UserInputDialog } from '@/components/UserInputDialog'
 import { ZOOM } from '@shared/constants'
 
 export function App(): JSX.Element {
@@ -13,21 +15,20 @@ export function App(): JSX.Element {
     useSessions()
   const { groups, launchAgent } = useAgents()
   const [fontSize, setFontSize] = useState(ZOOM.DEFAULT)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sessionsPanelVisible, setSessionsPanelVisible] = useState(true)
+  const [sessionsPanelWidth, setSessionsPanelWidth] = useState(240)
 
   const toggleSessionsPanel = useCallback(() => {
     setSessionsPanelVisible(prev => !prev)
   }, [])
 
   const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed(prev => !prev)
+    // No-op — sidebar is now always-visible tabs
   }, [])
 
   const launchAgentByIndex = useCallback(
     (index: number) => {
       if (!activeId || groups.length === 0) return
-      // Use the first group's agents for quick-launch
       const activeGroup = groups[0]
       if (!activeGroup || index < 0 || index >= activeGroup.agents.length) return
       launchAgent(activeGroup.agents[index].id, activeId)
@@ -59,16 +60,21 @@ export function App(): JSX.Element {
             onClose={closeSession}
             onCreate={createSession}
             onRename={renameSession}
+            width={sessionsPanelWidth}
+            onWidthChange={setSessionsPanelWidth}
+            onCollapse={() => setSessionsPanelVisible(false)}
           />
         )}
         <TerminalViewport sessions={sessions} activeId={activeId} fontSize={fontSize} />
-        <AgentsSidebar
-          activeSessionId={activeId}
-          collapsed={sidebarCollapsed}
-          onToggle={toggleSidebar}
-        />
+        <AgentsSidebar activeSessionId={activeId} />
       </div>
       <StatusBar sessions={sessions} activeSession={activeSession} />
+      {activeSession?.kind === 'copilot-sdk' && (
+        <>
+          <PermissionDialog sessionId={activeId} />
+          <UserInputDialog sessionId={activeId} />
+        </>
+      )}
     </div>
   )
 }

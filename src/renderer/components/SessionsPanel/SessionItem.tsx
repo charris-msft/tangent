@@ -32,9 +32,7 @@ export function SessionItem({
   const shadow = isActive ? ui.glowShadow : 'none'
 
   // Determine animation class for the left bar
-  const barAnimClass = ui.label === 'running' ? 'animate-pulse-slow'
-                     : ui.label === 'error' ? 'animate-pulse-fast'
-                     : ''
+  const barAnimClass = ui.label === 'error' ? 'animate-pulse-fast' : ''
 
   useEffect(() => {
     if (isRenaming) {
@@ -128,7 +126,9 @@ export function SessionItem({
         </div>
         {!isRenaming && (
           <div className="text-xs truncate italic" style={{ color: 'var(--text-secondary)' }}>
-            {session.lastActivity || 'idle'}
+            {session.agentType !== 'shell' && (!session.lastActivity || session.lastActivity.includes('cmd.exe'))
+              ? 'Waiting...'
+              : session.lastActivity || 'idle'}
           </div>
         )}
       </div>

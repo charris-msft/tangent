@@ -31,14 +31,17 @@ export function useSessions() {
     const unsubClosed = window.tangentAPI.session.onClosed((sessionId: string) => {
       setSessions(prev => {
         const next = prev.filter(s => s.id !== sessionId)
+        // Auto-select nearest session if the closed one was active
+        setActiveId(currentActive => {
+          if (currentActive === sessionId) {
+            const oldIndex = prev.findIndex(s => s.id === sessionId)
+            if (next.length === 0) return null
+            const newIndex = Math.min(oldIndex, next.length - 1)
+            return next[newIndex].id
+          }
+          return currentActive
+        })
         return next
-      })
-      setActiveId(prev => {
-        if (prev === sessionId) {
-          // Will be updated by getAll or next created event
-          return null
-        }
-        return prev
       })
     })
 

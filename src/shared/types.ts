@@ -14,10 +14,28 @@ export type AgentType = 'copilot-cli' | 'claude-code' | 'shell'
 
 export type UIStatusLabel = 'shell' | 'running' | 'idle' | 'error'
 
+// === Session Kind ===
+
+export type SessionKind = 'shell' | 'copilot-sdk' | 'pty-agent'
+
+// === Session Metrics (SDK) ===
+
+export interface SessionMetrics {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  cost: number
+  totalPremiumRequests: number
+  contextTokens?: number
+  contextLimit?: number
+}
+
 // === Session ===
 
 export interface Session {
   id: string
+  kind: SessionKind
   agentType: AgentType
   name: string
   folderName: string
@@ -31,6 +49,11 @@ export interface Session {
   exitCode?: number
   isExternal: boolean
   sourceFile?: string
+  agentCommand?: string
+  agentArgs?: string[]
+  agentEnv?: Record<string, string>
+  sdkSessionId?: string
+  metrics?: SessionMetrics
 }
 
 // === UI Status Indicator ===
@@ -56,13 +79,15 @@ export interface AgentProfile {
   args: string[]
   env?: Record<string, string>
   cwdMode: 'activeSession'
-  launchTarget: 'currentTab' | 'newTab'
+  launchTarget: 'currentTab' | 'newTab' | 'path'
+  cwdPath?: string
 }
 
 export interface AgentGroup {
   id: string
   name: string
   agents: AgentProfile[]
+  iconPath?: string
 }
 
 export interface AgentStoreData {

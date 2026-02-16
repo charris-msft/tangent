@@ -151,6 +151,7 @@ export class ExternalScanner {
 
     return {
       id: uuid(),
+      kind: 'pty-agent',
       agentType: info.agentType,
       name: folderName,
       folderName,

@@ -15,15 +15,15 @@ describe('mapStatusToUI', () => {
     })
   })
 
-  describe('running status (green, pulsing)', () => {
+  describe('running status (pulsing)', () => {
     it.each(['processing', 'tool_executing'] as SessionStatus[])('%s → running', (status) => {
       const ui = mapStatusToUI(status)
       expect(ui.label).toBe('running')
       expect(ui.dotVisible).toBe(true)
       expect(ui.dotColor).toBe('--running')
-      expect(ui.dotAnimation).toBe('pulse-slow')
+      expect(ui.dotAnimation).toBe('none')
       expect(ui.barColor).toBe('--running')
-      expect(ui.bgTintSelected).toBe('rgba(0, 255, 68, 0.10)')
+      expect(ui.bgTintSelected).toBe('rgba(255, 68, 119, 0.10)')
     })
   })
 

@@ -53,15 +53,16 @@ export function AgentItem({
           >
             {agent.name}
           </span>
-          {agent.launchTarget === 'newTab' && (
+          {agent.launchTarget !== 'currentTab' && (
             <span
               className="text-[10px] px-1 py-0 rounded shrink-0"
               style={{
                 background: 'var(--bg-tertiary)',
                 color: 'var(--text-muted)'
               }}
+              title={agent.launchTarget === 'path' ? agent.cwdPath : undefined}
             >
-              tab
+              {agent.launchTarget === 'path' ? 'path' : 'tab'}
             </span>
           )}
         </div>

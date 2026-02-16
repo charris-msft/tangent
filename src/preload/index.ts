@@ -55,6 +55,45 @@ const tangentAPI = {
     }
   },
 
+  sdk: {
+    sendMessage: (sessionId: string, prompt: string) =>
+      ipcRenderer.invoke('sdk:sendMessage', sessionId, prompt),
+    approvePermission: (sessionId: string, approved: boolean) =>
+      ipcRenderer.invoke('sdk:approvePermission', sessionId, approved),
+    answerInput: (sessionId: string, answer: string, wasFreeform: boolean) =>
+      ipcRenderer.invoke('sdk:answerInput', sessionId, answer, wasFreeform),
+
+    onOutput: (sessionId: string, cb: (data: string) => void) => {
+      const channel = `sdk:output:${sessionId}`
+      const handler = (_: any, data: string) => cb(data)
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
+    onPermissionRequest: (sessionId: string, cb: (request: any) => void) => {
+      const channel = `sdk:permission:${sessionId}`
+      const handler = (_: any, request: any) => cb(request)
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    },
+    onUserInput: (sessionId: string, cb: (request: any) => void) => {
+      const channel = `sdk:userInput:${sessionId}`
+      const handler = (_: any, request: any) => cb(request)
+      ipcRenderer.on(channel, handler)
+      return () => { ipcRenderer.removeListener(channel, handler) }
+    }
+  },
+
+  shell: {
+    openInVSCode: (folderPath: string) => ipcRenderer.invoke('shell:openInVSCode', folderPath),
+    openInExplorer: (folderPath: string) => ipcRenderer.invoke('shell:openInExplorer', folderPath)
+  },
+
+  dialog: {
+    openFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFolder'),
+    openFile: (filters?: { name: string; extensions: string[] }[]): Promise<string | null> =>
+      ipcRenderer.invoke('dialog:openFile', filters)
+  },
+
   app: {
     getZoom: () => ipcRenderer.invoke('app:getZoom'),
     setZoom: (level: number) => ipcRenderer.invoke('app:setZoom', level),

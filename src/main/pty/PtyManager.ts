@@ -10,7 +10,7 @@ export class PtyManager extends EventEmitter {
   private instances = new Map<string, pty.IPty>()
 
   spawn(id: string, cwd: string): pty.IPty {
-    const shell = 'powershell.exe'
+    const shell = 'pwsh.exe'
     const proc = pty.spawn(shell, [], {
       name: 'xterm-256color',
       cols: 80,
