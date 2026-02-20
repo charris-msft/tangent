@@ -20,10 +20,14 @@ function sdkLog(msg: string): void {
  * then connects the SDK to the embedded JSON-RPC server for deterministic
  * status detection, metrics, and structured events.
  */
+const MAX_SUBSCRIBE_RETRIES = 5
+
 export class SdkSessionManager {
   private clients = new Map<string, CopilotClient>()
   private sessions = new Map<string, CopilotSession>()
   private watching = new Set<string>()
+  private retryCounts = new Map<string, number>()
+  private lastInputQuestion = new Map<string, string>()
   private onNeedsInputCleared?: (sessionId: string) => void
 
   constructor(
@@ -86,7 +90,11 @@ export class SdkSessionManager {
       })
 
       // Detect when the agent asks the user a question → needs_input
+      // SDK may fire this callback twice for the same question — deduplicate
       client.onUserInputRequested((info) => {
+        const lastQ = this.lastInputQuestion.get(sessionId)
+        if (lastQ === info.question) return // duplicate
+        this.lastInputQuestion.set(sessionId, info.question)
         sdkLog(`User input requested for session ${sessionId}: ${info.question}`)
         this.store.updateStatus(sessionId, 'needs_input')
         this.store.updateActivity(sessionId, info.question)
@@ -94,7 +102,8 @@ export class SdkSessionManager {
 
       // Detect when the user answers → processing (agent resumes)
       client.onUserInputCompleted((info) => {
-        sdkLog(`User input completed for session ${sessionId}: ${info.answer}`)
+        sdkLog(`User input completed for session ${sessionId}: ${JSON.stringify(info.answer)}`)
+        this.lastInputQuestion.delete(sessionId) // reset for next question
         this.onNeedsInputCleared?.(sessionId)
         this.store.updateStatus(sessionId, 'processing')
       })
@@ -122,13 +131,22 @@ export class SdkSessionManager {
   }
 
   private async retrySubscribe(sessionId: string, client: CopilotClient): Promise<void> {
+    const count = (this.retryCounts.get(sessionId) ?? 0) + 1
+    this.retryCounts.set(sessionId, count)
+    if (count > MAX_SUBSCRIBE_RETRIES) {
+      sdkLog(`Max retries (${MAX_SUBSCRIBE_RETRIES}) reached for ${sessionId} — falling back to OSC+SystemB`)
+      this.retryCounts.delete(sessionId)
+      return
+    }
     try {
+      // Always try a fresh foreground session ID — the previous one may have been stale
       const fgId = await client.getForegroundSessionId()
       if (fgId) { await this.subscribeToSession(sessionId, client, fgId); return }
       const sessions = await client.listSessions()
       if (sessions.length > 0) await this.subscribeToSession(sessionId, client, sessions[0].sessionId)
+      else sdkLog(`Retry ${count}/${MAX_SUBSCRIBE_RETRIES}: no sessions found for ${sessionId}`)
     } catch (err) {
-      sdkLog(`Retry failed: ${(err as Error).message}`)
+      sdkLog(`Retry ${count}/${MAX_SUBSCRIBE_RETRIES} failed: ${(err as Error).message}`)
     }
   }
 
@@ -145,6 +163,7 @@ export class SdkSessionManager {
       }
 
       this.wireSessionEvents(tangentSessionId, sdkSession)
+      this.retryCounts.delete(tangentSessionId) // success — reset retry counter
       sdkLog(`SDK events wired for ${tangentSessionId}`)
     } catch (err) {
       const msg = (err as Error).message
@@ -162,6 +181,8 @@ export class SdkSessionManager {
   async closeSession(sessionId: string): Promise<void> {
     this.watching.delete(sessionId)
     this.sessions.delete(sessionId)
+    this.retryCounts.delete(sessionId)
+    this.lastInputQuestion.delete(sessionId)
     const client = this.clients.get(sessionId)
     if (client) {
       try { await client.stop() } catch { /* */ }

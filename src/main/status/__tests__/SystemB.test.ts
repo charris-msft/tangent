@@ -401,4 +401,68 @@ describe('SystemB', () => {
       expect(statusChanges).toEqual([])
     })
   })
+
+  describe('alt-screen mode scenarios', () => {
+    it('detects needs_input when question arrives in a chunk without ❯ prompt', () => {
+      // Alt-screen TUI sends the ask_user dialog as a separate chunk
+      systemB.feed('╭──────────────────────────╮\n│ Which color would you like? │\n╰──────────────────────────╯')
+      vi.advanceTimersByTime(600)
+      // No needs_input match — the dialog box doesn't match the pattern
+      // The actual needs_input match comes from the "Asking user" line
+      statusChanges = []
+      systemB.feed('● Asking user:  Which color would you like?')
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).toContain('needs_input')
+    })
+
+    it('spinner in alt-screen redraw overrides stale needs_input text', () => {
+      // First, enter needs_input
+      systemB.feed('Asking user: Choose a color')
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).toContain('needs_input')
+      statusChanges = []
+
+      // Alt-screen redraws include the full TUI — spinner + old question text
+      systemB.feed('⠋ Processing\nAsked user: Choose a color\n❯ ')
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).toContain('processing')
+      expect(statusChanges).not.toContain('needs_input')
+    })
+
+    it('full alt-screen TUI redraw with prompt and old question does not re-trigger needs_input', () => {
+      // Initial needs_input
+      systemB.feed('Asking user: Pick a number')
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).toContain('needs_input')
+      statusChanges = []
+
+      // Clear via external signal (SDK/OSC)
+      systemB.clearNeedsInput()
+
+      // Alt-screen TUI redraw: historical question text + prompt visible
+      systemB.feed('GitHub Copilot v1.0\nAsked user: Pick a number\nYou chose: 42\n❯ ')
+      vi.advanceTimersByTime(600)
+      // Should NOT re-enter needs_input (cooldown active + prompt visible)
+      expect(statusChanges).not.toContain('needs_input')
+    })
+
+    it('processing detected when ❯ prompt is present during active work', () => {
+      // In alt-screen, ❯ is always visible. Processing should still work.
+      systemB.feed('⠙ Thinking about the problem...\n❯ ')
+      expect(statusChanges).toContain('processing')
+    })
+
+    it('agent_ready is suppressed during processing even when ❯ prompt is present', () => {
+      // Get into processing
+      systemB.feed('⠋ Working...')
+      expect(statusChanges).toContain('processing')
+      statusChanges = []
+
+      // Alt-screen redraw with ❯ prompt — should NOT trigger agent_ready
+      // because we're in processing state
+      systemB.feed('⠙ Still working...\n❯ ')
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).not.toContain('agent_ready')
+    })
+  })
 })
