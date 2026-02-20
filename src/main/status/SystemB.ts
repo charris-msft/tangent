@@ -70,6 +70,21 @@ export class SystemB extends EventEmitter {
     // Strip ANSI escape sequences for all pattern matching
     const clean = stripAnsi(data)
 
+    // Diagnostic: log status-relevant matches to debug alt-screen issues
+    if (process.env.TANGENT_STATUS_DEBUG) {
+      const needsInputMatch = RULES[4].pattern.test(clean)
+      const promptMatch = /^[❯›]\s*/m.test(clean)
+      const spinnerMatch = SPINNER_PATTERN.test(clean)
+      if (needsInputMatch || spinnerMatch) {
+        const snippet = clean.slice(0, 300).replace(/\n/g, '\\n')
+        try {
+          const fs = require('fs'), path = require('path'), os = require('os')
+          fs.appendFileSync(path.join(os.homedir(), '.tangent', 'status-debug.log'),
+            `[${new Date().toISOString()}] needs_input=${needsInputMatch} spinner=${spinnerMatch} prompt=${promptMatch} status=${this.currentStatus} cooldown=${Date.now() < this.needsInputCooldownUntil}\n  ${snippet}\n`)
+        } catch { /* */ }
+      }
+    }
+
     // Cancel pending agent_ready only if new VISIBLE output arrives.
     // ANSI/OSC-only data (title updates, cursor control) should not
     // interrupt the silence timer — agents often emit these right after

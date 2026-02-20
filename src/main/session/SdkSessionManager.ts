@@ -97,7 +97,6 @@ export class SdkSessionManager {
         sdkLog(`User input completed for session ${sessionId}: ${info.answer}`)
         this.onNeedsInputCleared?.(sessionId)
         this.store.updateStatus(sessionId, 'processing')
-        this.store.updateActivity(sessionId, `Answered: ${info.answer}`)
       })
 
       this.clients.set(sessionId, client)
