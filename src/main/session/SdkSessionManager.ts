@@ -188,6 +188,13 @@ export class SdkSessionManager {
       const type = event.type
       const data = event.data as Record<string, unknown>
 
+      // Log status-relevant events for debugging
+      if (['assistant.turn_start', 'session.idle', 'session.error', 'session.shutdown',
+           'tool.execution_start', 'tool.execution_complete', 'skill.invoked',
+           'subagent.started', 'subagent.completed', 'subagent.failed'].includes(type)) {
+        sdkLog(`[event] ${type} for session ${sessionId} (sdk: ${_sdkSessionId})`)
+      }
+
       switch (type) {
         case 'assistant.turn_start':
           this.store.updateStatus(sessionId, 'processing')
