@@ -1,8 +1,8 @@
-import { CopilotClient, CopilotSession } from '@github/copilot-sdk'
-import type { ConnectionStateChange } from '@github/copilot-sdk'
+import { CopilotClient } from '@github/copilot-sdk'
+import type { ConnectionStateChange, SessionEvent } from '@github/copilot-sdk'
 import path from 'path'
 import { execSync } from 'child_process'
-import { existsSync, appendFileSync } from 'fs'
+import { existsSync, appendFileSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { SessionStore } from './SessionStore'
 import type { PtyManager } from '../pty/PtyManager'
@@ -30,7 +30,7 @@ function extractPluginVersion(skillPath: string): string | undefined {
     const pluginDir = match[1]
     const configFile = path.join(pluginDir, `${pluginName}.config.json`)
     if (existsSync(configFile)) {
-      const content = JSON.parse(require('fs').readFileSync(configFile, 'utf-8'))
+      const content = JSON.parse(readFileSync(configFile, 'utf-8'))
       return content.version
     }
   } catch { /* */ }
@@ -45,13 +45,9 @@ function extractPluginVersion(skillPath: string): string | undefined {
  * then connects the SDK to the embedded JSON-RPC server for deterministic
  * status detection, metrics, and structured events.
  */
-const MAX_SUBSCRIBE_RETRIES = 5
-
 export class SdkSessionManager {
   private clients = new Map<string, CopilotClient>()
-  private sessions = new Map<string, CopilotSession>()
   private watching = new Set<string>()
-  private retryCounts = new Map<string, number>()
   private lastInputQuestion = new Map<string, string>()
   private onNeedsInputCleared?: (sessionId: string) => void
 
@@ -133,80 +129,38 @@ export class SdkSessionManager {
         this.store.updateStatus(sessionId, 'processing')
       })
 
+      // Wire ALL session events at the CLIENT level — bypasses session ID mismatch.
+      // The CLI may broadcast events with a different session ID than what
+      // resumeSession returns, causing session-level .on() handlers to miss events.
+      this.wireClientEvents(sessionId, client)
+
       this.clients.set(sessionId, client)
 
       // Establish TCP connection to the embedded server
       await client.start()
       sdkLog(`SDK connected to port ${port} for session ${sessionId}`)
 
-      const fgSessionId = await client.getForegroundSessionId()
-      if (fgSessionId) {
-        await this.subscribeToSession(sessionId, client, fgSessionId)
-      } else {
-        const sessions = await client.listSessions()
-        if (sessions.length > 0) {
-          await this.subscribeToSession(sessionId, client, sessions[0].sessionId)
-        } else {
-          setTimeout(() => this.retrySubscribe(sessionId, client), 3000)
+      // Try to subscribe for session resume (nice-to-have for context, not required for events)
+      try {
+        const fgSessionId = await client.getForegroundSessionId()
+        if (fgSessionId) {
+          const session = this.store.get(sessionId)
+          if (session) {
+            session.sdkSessionId = fgSessionId
+            session.updatedAt = Date.now()
+          }
+          sdkLog(`Foreground session: ${fgSessionId} for Tangent session ${sessionId}`)
         }
+      } catch (err) {
+        sdkLog(`getForegroundSessionId failed (non-fatal): ${(err as Error).message}`)
       }
     } catch (err) {
       sdkLog(`Failed to connect to port ${port}: ${(err as Error).message}`)
     }
   }
 
-  private async retrySubscribe(sessionId: string, client: CopilotClient): Promise<void> {
-    const count = (this.retryCounts.get(sessionId) ?? 0) + 1
-    this.retryCounts.set(sessionId, count)
-    if (count > MAX_SUBSCRIBE_RETRIES) {
-      sdkLog(`Max retries (${MAX_SUBSCRIBE_RETRIES}) reached for ${sessionId} — falling back to OSC+SystemB`)
-      this.retryCounts.delete(sessionId)
-      return
-    }
-    try {
-      // Always try a fresh foreground session ID — the previous one may have been stale
-      const fgId = await client.getForegroundSessionId()
-      if (fgId) { await this.subscribeToSession(sessionId, client, fgId); return }
-      const sessions = await client.listSessions()
-      if (sessions.length > 0) await this.subscribeToSession(sessionId, client, sessions[0].sessionId)
-      else sdkLog(`Retry ${count}/${MAX_SUBSCRIBE_RETRIES}: no sessions found for ${sessionId}`)
-    } catch (err) {
-      sdkLog(`Retry ${count}/${MAX_SUBSCRIBE_RETRIES} failed: ${(err as Error).message}`)
-    }
-  }
-
-  private async subscribeToSession(tangentSessionId: string, client: CopilotClient, sdkSessionId: string): Promise<void> {
-    try {
-      sdkLog(`Subscribing to SDK session ${sdkSessionId} for Tangent session ${tangentSessionId}`)
-      const sdkSession = await client.resumeSession(sdkSessionId, { streaming: true })
-      this.sessions.set(tangentSessionId, sdkSession)
-
-      const session = this.store.get(tangentSessionId)
-      if (session) {
-        session.sdkSessionId = sdkSessionId
-        session.updatedAt = Date.now()
-      }
-
-      this.wireSessionEvents(tangentSessionId, sdkSession)
-      this.retryCounts.delete(tangentSessionId) // success — reset retry counter
-      sdkLog(`SDK events wired for ${tangentSessionId}`)
-    } catch (err) {
-      const msg = (err as Error).message
-      sdkLog(`Failed to subscribe: ${msg}`)
-
-      // If session not found, retry after a delay — the TUI session may not
-      // be registered with the server yet (race between TUI init and SDK connect)
-      if (msg.includes('Session not found')) {
-        sdkLog(`Will retry subscribe in 3s for ${tangentSessionId}`)
-        setTimeout(() => this.retrySubscribe(tangentSessionId, client), 3000)
-      }
-    }
-  }
-
   async closeSession(sessionId: string): Promise<void> {
     this.watching.delete(sessionId)
-    this.sessions.delete(sessionId)
-    this.retryCounts.delete(sessionId)
     this.lastInputQuestion.delete(sessionId)
     const client = this.clients.get(sessionId)
     if (client) {
@@ -216,120 +170,156 @@ export class SdkSessionManager {
   }
 
   hasSession(sessionId: string): boolean {
-    return this.sessions.has(sessionId) || this.clients.has(sessionId)
+    return this.clients.has(sessionId)
   }
 
   async dispose(): Promise<void> {
     for (const [id] of this.clients) await this.closeSession(id)
   }
 
-  private wireSessionEvents(sessionId: string, sdkSession: CopilotSession): void {
-    sdkSession.on('assistant.turn_start', () => {
-      this.store.updateStatus(sessionId, 'processing')
+  /**
+   * Wire ALL session events at the CLIENT level using onSessionEvent().
+   * This fires for every event regardless of session ID matching — eliminates
+   * the bug where session.resume returns a different ID than what the CLI
+   * uses for event notifications, causing session-level .on() to miss events.
+   */
+  private wireClientEvents(sessionId: string, client: CopilotClient): void {
+    client.onSessionEvent((_sdkSessionId: string, event: SessionEvent) => {
+      const type = event.type
+      const data = event.data as Record<string, unknown>
+
+      switch (type) {
+        case 'assistant.turn_start':
+          this.store.updateStatus(sessionId, 'processing')
+          break
+        case 'assistant.intent':
+          if (data?.intent) this.store.updateActivity(sessionId, data.intent as string)
+          break
+        case 'session.idle':
+          this.store.updateStatus(sessionId, 'agent_ready')
+          break
+        case 'session.error':
+          this.store.updateStatus(sessionId, 'failed')
+          if (data?.message) this.store.updateActivity(sessionId, data.message as string)
+          break
+        case 'session.shutdown':
+          if (data?.totalPremiumRequests != null) {
+            this.store.updateMetrics(sessionId, { totalPremiumRequests: data.totalPremiumRequests as number })
+          }
+          this.store.updateStatus(sessionId, 'exited')
+          break
+        case 'tool.execution_start': {
+          const toolName = data?.toolName as string
+          // Skip ask_user — handled by onUserInputRequested
+          if (toolName === 'ask_user') break
+          this.store.updateStatus(sessionId, 'tool_executing')
+          this.store.updateActivity(sessionId, toolName)
+          const isMcp = !!data?.mcpServerName
+          this.store.addToolUse({
+            id: data?.toolCallId as string,
+            sessionId,
+            kind: 'tool',
+            name: (data?.mcpToolName as string) ?? toolName,
+            source: isMcp ? 'mcp' : 'built-in',
+            status: 'running',
+            startedAt: Date.now(),
+            mcpServerName: data?.mcpServerName as string | undefined,
+            mcpToolName: data?.mcpToolName as string | undefined,
+            args: data?.arguments,
+            parentToolCallId: data?.parentToolCallId as string | undefined,
+          })
+          break
+        }
+        case 'tool.execution_progress': {
+          const msg = data?.progressMessage as string | undefined
+          if (msg) {
+            this.store.updateActivity(sessionId, msg)
+            this.store.updateToolUse(sessionId, data?.toolCallId as string, { progressMessage: msg })
+          }
+          break
+        }
+        case 'tool.execution_complete': {
+          const toolCallId = data?.toolCallId as string
+          const success = data?.success as boolean
+          this.store.updateStatus(sessionId, 'processing')
+          const result = data?.result as { content?: string } | undefined
+          const error = data?.error as { message?: string } | undefined
+          this.store.updateToolUse(sessionId, toolCallId, {
+            status: success ? 'success' : 'error',
+            completedAt: Date.now(),
+            result: result?.content,
+            error: error?.message,
+          })
+          break
+        }
+        case 'skill.invoked': {
+          const skillPath = data?.path as string ?? ''
+          const pluginName = extractPluginName(skillPath)
+          const pluginVersion = extractPluginVersion(skillPath)
+          this.store.addToolUse({
+            id: `skill-${Date.now()}`,
+            sessionId,
+            kind: 'skill',
+            name: data?.name as string,
+            source: 'skill',
+            status: 'success',
+            startedAt: Date.now(),
+            completedAt: Date.now(),
+            pluginName,
+            pluginVersion,
+          })
+          break
+        }
+        case 'subagent.started':
+          this.store.addToolUse({
+            id: data?.toolCallId as string,
+            sessionId,
+            kind: 'subagent',
+            name: (data?.agentDisplayName as string) || (data?.agentName as string),
+            source: 'built-in',
+            status: 'running',
+            startedAt: Date.now(),
+          })
+          break
+        case 'subagent.completed':
+          this.store.updateToolUse(sessionId, data?.toolCallId as string, {
+            status: 'success',
+            completedAt: Date.now(),
+          })
+          break
+        case 'subagent.failed':
+          this.store.updateToolUse(sessionId, data?.toolCallId as string, {
+            status: 'error',
+            completedAt: Date.now(),
+            error: data?.error as string,
+          })
+          break
+        case 'assistant.usage': {
+          this.store.updateMetrics(sessionId, {
+            inputTokens: (data?.inputTokens as number) ?? 0,
+            outputTokens: (data?.outputTokens as number) ?? 0,
+            cacheReadTokens: (data?.cacheReadTokens as number) ?? 0,
+            cacheWriteTokens: (data?.cacheWriteTokens as number) ?? 0,
+            cost: (data?.cost as number) ?? 0
+          })
+          break
+        }
+        case 'session.context_changed': {
+          const cwd = data?.cwd as string
+          if (cwd) {
+            const folderName = path.basename(cwd)
+            this.store.updateCwd(sessionId, cwd, folderName)
+          }
+          break
+        }
+        case 'session.title_changed': {
+          const title = data?.title as string
+          if (title) this.store.updateActivity(sessionId, title)
+          break
+        }
+      }
     })
-    sdkSession.on('assistant.intent', (event) => {
-      this.store.updateActivity(sessionId, event.data.intent)
-    })
-    sdkSession.on('session.idle', () => {
-      this.store.updateStatus(sessionId, 'agent_ready')
-    })
-    sdkSession.on('session.error', (event) => {
-      this.store.updateStatus(sessionId, 'failed')
-      this.store.updateActivity(sessionId, event.data.message)
-    })
-    sdkSession.on('session.shutdown', (event) => {
-      this.store.updateMetrics(sessionId, { totalPremiumRequests: event.data.totalPremiumRequests })
-      this.store.updateStatus(sessionId, 'exited')
-    })
-    sdkSession.on('tool.execution_start', (event) => {
-      this.store.updateStatus(sessionId, 'tool_executing')
-      this.store.updateActivity(sessionId, event.data.toolName)
-      const isMcp = !!event.data.mcpServerName
-      this.store.addToolUse({
-        id: event.data.toolCallId,
-        sessionId,
-        kind: 'tool',
-        name: event.data.mcpToolName ?? event.data.toolName,
-        source: isMcp ? 'mcp' : 'built-in',
-        status: 'running',
-        startedAt: Date.now(),
-        mcpServerName: event.data.mcpServerName,
-        mcpToolName: event.data.mcpToolName,
-        args: event.data.arguments,
-        parentToolCallId: event.data.parentToolCallId,
-      })
-    })
-    sdkSession.on('tool.execution_progress', (event) => {
-      this.store.updateActivity(sessionId, event.data.progressMessage)
-      this.store.updateToolUse(sessionId, event.data.toolCallId, {
-        progressMessage: event.data.progressMessage,
-      })
-    })
-    sdkSession.on('tool.execution_complete', (event) => {
-      this.store.updateStatus(sessionId, 'processing')
-      this.store.updateToolUse(sessionId, event.data.toolCallId, {
-        status: event.data.success ? 'success' : 'error',
-        completedAt: Date.now(),
-        result: event.data.result?.content,
-        error: event.data.error?.message,
-      })
-    })
-    sdkSession.on('skill.invoked', (event) => {
-      const pluginName = extractPluginName(event.data.path)
-      const pluginVersion = extractPluginVersion(event.data.path)
-      this.store.addToolUse({
-        id: `skill-${Date.now()}`,
-        sessionId,
-        kind: 'skill',
-        name: event.data.name,
-        source: 'skill',
-        status: 'success',
-        startedAt: Date.now(),
-        completedAt: Date.now(),
-        pluginName,
-        pluginVersion,
-      })
-    })
-    sdkSession.on('subagent.started', (event) => {
-      this.store.addToolUse({
-        id: event.data.toolCallId,
-        sessionId,
-        kind: 'subagent',
-        name: event.data.agentDisplayName || event.data.agentName,
-        source: 'built-in',
-        status: 'running',
-        startedAt: Date.now(),
-      })
-    })
-    sdkSession.on('subagent.completed', (event) => {
-      this.store.updateToolUse(sessionId, event.data.toolCallId, {
-        status: 'success',
-        completedAt: Date.now(),
-      })
-    })
-    sdkSession.on('subagent.failed', (event) => {
-      this.store.updateToolUse(sessionId, event.data.toolCallId, {
-        status: 'error',
-        completedAt: Date.now(),
-        error: event.data.error,
-      })
-    })
-    sdkSession.on('assistant.usage', (event) => {
-      this.store.updateMetrics(sessionId, {
-        inputTokens: event.data.inputTokens ?? 0,
-        outputTokens: event.data.outputTokens ?? 0,
-        cacheReadTokens: event.data.cacheReadTokens ?? 0,
-        cacheWriteTokens: event.data.cacheWriteTokens ?? 0,
-        cost: event.data.cost ?? 0
-      })
-    })
-    sdkSession.on('session.context_changed', (event) => {
-      const folderName = path.basename(event.data.cwd)
-      this.store.updateCwd(sessionId, event.data.cwd, folderName)
-    })
-    sdkSession.on('session.title_changed', (event) => {
-      this.store.updateActivity(sessionId, event.data.title)
-    })
+    sdkLog(`Client-level events wired for session ${sessionId}`)
   }
 
   findCliPath(): string | undefined {
