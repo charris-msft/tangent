@@ -1,6 +1,6 @@
 import { createServerRpc } from "./generated/rpc.js";
 import { CopilotSession } from "./session.js";
-import type { ConnectionState, ConnectionStateHandler, CopilotClientOptions, GetAuthStatusResponse, GetStatusResponse, ModelInfo, ResumeSessionConfig, SessionConfig, SessionLifecycleEventType, SessionLifecycleHandler, SessionListFilter, SessionMetadata, TypedSessionLifecycleHandler } from "./types.js";
+import type { ConnectionState, ConnectionStateHandler, CopilotClientOptions, GetAuthStatusResponse, GetStatusResponse, ModelInfo, ResumeSessionConfig, SessionConfig, SessionEvent, SessionLifecycleEventType, SessionLifecycleHandler, SessionListFilter, SessionMetadata, TypedSessionLifecycleHandler } from "./types.js";
 export declare class CopilotClient {
     private cliProcess;
     private connection;
@@ -22,6 +22,7 @@ export declare class CopilotClient {
     private userInputRequestHandlers;
     private userInputCompletedHandlers;
     private pendingAskUserCallIds;
+    private sessionEventHandlers;
     /**
      * Typed server-scoped RPC methods.
      * @throws Error if the client is not connected
@@ -226,6 +227,12 @@ export declare class CopilotClient {
         sessionId: string;
         answer: string;
     }) => void): () => void;
+    /**
+     * Register a handler for ALL session events (client-level, no session ID filtering).
+     * This is useful when session.resume may return a different session ID than the
+     * one the CLI uses for event notifications, causing session-level handlers to miss events.
+     */
+    onSessionEvent(handler: (sessionId: string, event: SessionEvent) => void): () => void;
     /**
      * Update connection state and notify all registered handlers.
      * Only dispatches if the state actually changes.

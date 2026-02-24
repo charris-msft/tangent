@@ -47,6 +47,7 @@ class CopilotClient {
   userInputRequestHandlers = /* @__PURE__ */ new Set();
   userInputCompletedHandlers = /* @__PURE__ */ new Set();
   pendingAskUserCallIds = /* @__PURE__ */ new Set();
+  sessionEventHandlers = /* @__PURE__ */ new Set();
   /**
    * Typed server-scoped RPC methods.
    * @throws Error if the client is not connected
@@ -531,6 +532,17 @@ class CopilotClient {
     this.userInputCompletedHandlers.add(handler);
     return () => {
       this.userInputCompletedHandlers.delete(handler);
+    };
+  }
+  /**
+   * Register a handler for ALL session events (client-level, no session ID filtering).
+   * This is useful when session.resume may return a different session ID than the
+   * one the CLI uses for event notifications, causing session-level handlers to miss events.
+   */
+  onSessionEvent(handler) {
+    this.sessionEventHandlers.add(handler);
+    return () => {
+      this.sessionEventHandlers.delete(handler);
     };
   }
   /**
@@ -1028,7 +1040,8 @@ class CopilotClient {
     if (event.type === "tool.execution_complete") {
       const toolCallId = data?.toolCallId;
       if (toolCallId && this.pendingAskUserCallIds.delete(toolCallId)) {
-        const answer = data?.result ?? "";
+        const rawResult = data?.result;
+        const answer = typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult) ?? "";
         for (const handler of this.userInputCompletedHandlers) {
           try {
             handler({ sessionId, answer });
@@ -1040,6 +1053,12 @@ class CopilotClient {
     const session = this.sessions.get(sessionId);
     if (session) {
       session._dispatchEvent(event);
+    }
+    for (const handler of this.sessionEventHandlers) {
+      try {
+        handler(sessionId, event);
+      } catch {
+      }
     }
   }
   handleSessionLifecycleNotification(notification) {
