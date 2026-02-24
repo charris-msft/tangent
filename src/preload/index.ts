@@ -103,6 +103,15 @@ const tangentAPI = {
       ipcRenderer.invoke('dialog:saveFile', options)
   },
 
+  tooluse: {
+    getAll: (sessionId: string) => ipcRenderer.invoke('tooluse:getAll', sessionId),
+    onEntry: (cb: (entry: any) => void) => {
+      const handler = (_: any, entry: any) => cb(entry)
+      ipcRenderer.on('tooluse:entry', handler)
+      return () => { ipcRenderer.removeListener('tooluse:entry', handler) }
+    }
+  },
+
   config: {
     get: () => ipcRenderer.invoke('config:get'),
     update: (key: string, value: unknown) => ipcRenderer.invoke('config:update', { key, value }),

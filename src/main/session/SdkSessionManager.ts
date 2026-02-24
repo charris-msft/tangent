@@ -12,6 +12,31 @@ function sdkLog(msg: string): void {
   try { appendFileSync(path.join(homedir(), '.tangent', 'sdk-debug.log'), line) } catch { /* */ }
 }
 
+/** Extract plugin name from skill path (e.g., ~/.copilot/installed-plugins/my-plugin/skills/foo/) */
+function extractPluginName(skillPath: string): string | undefined {
+  const match = skillPath.match(/installed-plugins[\\/]([^\\/]+)[\\/]/)
+    || skillPath.match(/plugins[\\/]_direct[\\/]([^\\/]+)[\\/]/)
+  return match?.[1]
+}
+
+/** Try to read plugin version from <pluginName>.config.json in the plugin directory */
+function extractPluginVersion(skillPath: string): string | undefined {
+  try {
+    const pluginName = extractPluginName(skillPath)
+    if (!pluginName) return undefined
+    // Find the plugin root directory (path up to plugin name)
+    const match = skillPath.match(/(.*installed-plugins[\\/](?:_direct[\\/])?[^\\/]+)[\\/]/)
+    if (!match) return undefined
+    const pluginDir = match[1]
+    const configFile = path.join(pluginDir, `${pluginName}.config.json`)
+    if (existsSync(configFile)) {
+      const content = JSON.parse(require('fs').readFileSync(configFile, 'utf-8'))
+      return content.version
+    }
+  } catch { /* */ }
+  return undefined
+}
+
 /**
  * SdkSessionManager — Hybrid PTY+SDK mode for Copilot sessions.
  *
@@ -219,12 +244,75 @@ export class SdkSessionManager {
     sdkSession.on('tool.execution_start', (event) => {
       this.store.updateStatus(sessionId, 'tool_executing')
       this.store.updateActivity(sessionId, event.data.toolName)
+      const isMcp = !!event.data.mcpServerName
+      this.store.addToolUse({
+        id: event.data.toolCallId,
+        sessionId,
+        kind: 'tool',
+        name: event.data.mcpToolName ?? event.data.toolName,
+        source: isMcp ? 'mcp' : 'built-in',
+        status: 'running',
+        startedAt: Date.now(),
+        mcpServerName: event.data.mcpServerName,
+        mcpToolName: event.data.mcpToolName,
+        args: event.data.arguments,
+        parentToolCallId: event.data.parentToolCallId,
+      })
     })
     sdkSession.on('tool.execution_progress', (event) => {
       this.store.updateActivity(sessionId, event.data.progressMessage)
+      this.store.updateToolUse(sessionId, event.data.toolCallId, {
+        progressMessage: event.data.progressMessage,
+      })
     })
-    sdkSession.on('tool.execution_complete', () => {
+    sdkSession.on('tool.execution_complete', (event) => {
       this.store.updateStatus(sessionId, 'processing')
+      this.store.updateToolUse(sessionId, event.data.toolCallId, {
+        status: event.data.success ? 'success' : 'error',
+        completedAt: Date.now(),
+        result: event.data.result?.content,
+        error: event.data.error?.message,
+      })
+    })
+    sdkSession.on('skill.invoked', (event) => {
+      const pluginName = extractPluginName(event.data.path)
+      const pluginVersion = extractPluginVersion(event.data.path)
+      this.store.addToolUse({
+        id: `skill-${Date.now()}`,
+        sessionId,
+        kind: 'skill',
+        name: event.data.name,
+        source: 'skill',
+        status: 'success',
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        pluginName,
+        pluginVersion,
+      })
+    })
+    sdkSession.on('subagent.started', (event) => {
+      this.store.addToolUse({
+        id: event.data.toolCallId,
+        sessionId,
+        kind: 'subagent',
+        name: event.data.agentDisplayName || event.data.agentName,
+        source: 'built-in',
+        status: 'running',
+        startedAt: Date.now(),
+      })
+    })
+    sdkSession.on('subagent.completed', (event) => {
+      this.store.updateToolUse(sessionId, event.data.toolCallId, {
+        status: 'success',
+        completedAt: Date.now(),
+      })
+    })
+    sdkSession.on('subagent.failed', (event) => {
+      this.store.updateToolUse(sessionId, event.data.toolCallId, {
+        status: 'error',
+        completedAt: Date.now(),
+        error: event.data.error,
+      })
     })
     sdkSession.on('assistant.usage', (event) => {
       this.store.updateMetrics(sessionId, {

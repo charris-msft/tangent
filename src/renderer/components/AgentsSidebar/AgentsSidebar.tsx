@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { useAgents } from '@/hooks/useAgents'
 import { AgentItem } from './AgentItem'
 import { AgentForm } from './AgentForm'
+import { ToolUsePanel } from '../ToolUsePanel/ToolUsePanel'
 import type { AgentProfile, ProjectFolder } from '@shared/types'
 
 interface AgentsSidebarProps {
@@ -21,6 +22,7 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
   const [pendingPrefill, setPendingPrefill] = useState<AgentProfile | null>(null)
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
+  const [toolUseOpen, setToolUseOpen] = useState(false)
   const popupRef = useRef<HTMLDivElement>(null)
   const tabsRef = useRef<HTMLDivElement>(null)
   const groupPickerRef = useRef<HTMLDivElement>(null)
@@ -108,6 +110,7 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
 
   // --- Tab click ---
   const handleTabClick = useCallback((index: number) => {
+    setToolUseOpen(false)
     setOpenGroupIndex(prev => {
       if (prev === index) return null // toggle off
       return index
@@ -462,6 +465,16 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
         </div>
       )}
 
+      {/* Tool Use panel (overlays to the left of tabs) */}
+      {toolUseOpen && (
+        <div
+          className="absolute right-11 top-0 bottom-0 w-[280px] flex flex-col border-l border-[var(--bg-hover)] z-20"
+          style={{ background: 'var(--bg-secondary)', boxShadow: '-4px 0 16px rgba(0, 0, 0, 0.35)' }}
+        >
+          <ToolUsePanel activeSessionId={activeSessionId} />
+        </div>
+      )}
+
       {/* Vertical tab strip */}
       <div
         ref={tabsRef}
@@ -514,6 +527,32 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
           aria-label="Add project"
         >
           <span className="text-lg">+</span>
+        </button>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Tool Use tab (system tab at bottom) */}
+        <button
+          onClick={() => {
+            setToolUseOpen(prev => !prev)
+            if (!toolUseOpen) {
+              setOpenGroupIndex(null)
+              setShowForm(false)
+            }
+          }}
+          className="w-8 h-8 flex items-center justify-center rounded transition-all"
+          style={{
+            color: toolUseOpen ? 'var(--text-primary)' : 'var(--text-muted)',
+            background: toolUseOpen ? 'var(--bg-hover)' : 'transparent',
+            opacity: toolUseOpen ? 1 : 0.7
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1' }}
+          onMouseLeave={(e) => { if (!toolUseOpen) e.currentTarget.style.opacity = '0.7' }}
+          title="Tool Use"
+          aria-label="Tool Use"
+        >
+          <span className="text-sm">🔧</span>
         </button>
       </div>
     </div>

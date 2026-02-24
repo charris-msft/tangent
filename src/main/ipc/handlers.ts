@@ -39,6 +39,14 @@ export function registerIpcHandlers(deps: {
     getWindow()?.webContents.send('session:closed', sessionId)
   })
 
+  // Forward tool-use events to renderer
+  sessionStore.on('tool-use', (entry) => {
+    getWindow()?.webContents.send('tooluse:entry', entry)
+  })
+
+  // Tool use query
+  ipcMain.handle('tooluse:getAll', (_, sessionId: string) => sessionStore.getToolUse(sessionId))
+
   // --- Terminal ---
   ipcMain.on('terminal:write', (_, sessionId: string, data: string) => {
     const session = sessionStore.get(sessionId)

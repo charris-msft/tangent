@@ -1,9 +1,10 @@
 import { EventEmitter } from 'events'
 import { canTransition } from '@shared/transitions'
-import type { Session, SessionMetrics, SessionStatus } from '@shared/types'
+import type { Session, SessionMetrics, SessionStatus, ToolUseEntry } from '@shared/types'
 
 export class SessionStore extends EventEmitter {
   private sessions = new Map<string, Session>()
+  private toolUseEntries = new Map<string, ToolUseEntry[]>() // sessionId → entries
 
   getAll(): Session[] {
     return Array.from(this.sessions.values())
@@ -162,5 +163,27 @@ export class SessionStore extends EventEmitter {
     session.updatedAt = Date.now()
     this.emit('updated', session)
     this.emit('metrics', session)
+  }
+
+  // === Tool Use Tracking ===
+
+  addToolUse(entry: ToolUseEntry): void {
+    const list = this.toolUseEntries.get(entry.sessionId) ?? []
+    list.push(entry)
+    this.toolUseEntries.set(entry.sessionId, list)
+    this.emit('tool-use', entry)
+  }
+
+  updateToolUse(sessionId: string, toolCallId: string, update: Partial<ToolUseEntry>): void {
+    const list = this.toolUseEntries.get(sessionId)
+    if (!list) return
+    const entry = list.find(e => e.id === toolCallId)
+    if (!entry) return
+    Object.assign(entry, update)
+    this.emit('tool-use', entry)
+  }
+
+  getToolUse(sessionId: string): ToolUseEntry[] {
+    return this.toolUseEntries.get(sessionId) ?? []
   }
 }

@@ -95,6 +95,32 @@ export interface AgentStoreData {
   groups: ProjectFolder[]
 }
 
+// === Tool Use Tracking ===
+
+export type ToolUseKind = 'tool' | 'skill' | 'subagent'
+export type ToolUseSource = 'built-in' | 'mcp' | 'skill'
+export type ToolUseStatus = 'running' | 'success' | 'error'
+
+export interface ToolUseEntry {
+  id: string              // toolCallId from SDK
+  sessionId: string
+  kind: ToolUseKind
+  name: string            // tool name, skill name, or agent name
+  source: ToolUseSource
+  status: ToolUseStatus
+  startedAt: number
+  completedAt?: number
+  mcpServerName?: string  // MCP server that provided the tool
+  mcpToolName?: string    // actual tool name within MCP server
+  pluginName?: string     // plugin that provided the skill
+  pluginVersion?: string
+  args?: unknown          // tool arguments
+  result?: string         // summary of result
+  error?: string          // error message if failed
+  progressMessage?: string
+  parentToolCallId?: string // for nested/subagent calls
+}
+
 // === Status File (System A) ===
 
 export interface StatusFile {

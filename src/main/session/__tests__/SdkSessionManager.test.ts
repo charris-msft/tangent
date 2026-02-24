@@ -471,3 +471,141 @@ describe('SDK-specific transitions', () => {
     expect(canTransition(from, to)).toBe(true)
   })
 })
+
+// ============================================================================
+// SessionStore — Tool Use tracking
+// ============================================================================
+
+describe('SessionStore tool use tracking', () => {
+  let store: SessionStore
+
+  beforeEach(() => {
+    const result = createTestStore()
+    store = result.store
+  })
+
+  it('addToolUse stores and emits entry', () => {
+    const handler = vi.fn()
+    store.on('tool-use', handler)
+
+    store.addToolUse({
+      id: 'tc-1',
+      sessionId: 'sdk-test-1',
+      kind: 'tool',
+      name: 'read_file',
+      source: 'built-in',
+      status: 'running',
+      startedAt: 1000,
+    })
+
+    expect(handler).toHaveBeenCalledOnce()
+    expect(store.getToolUse('sdk-test-1')).toHaveLength(1)
+    expect(store.getToolUse('sdk-test-1')[0].name).toBe('read_file')
+  })
+
+  it('updateToolUse updates existing entry and emits', () => {
+    store.addToolUse({
+      id: 'tc-2',
+      sessionId: 'sdk-test-1',
+      kind: 'tool',
+      name: 'edit_file',
+      source: 'built-in',
+      status: 'running',
+      startedAt: 1000,
+    })
+
+    const handler = vi.fn()
+    store.on('tool-use', handler)
+
+    store.updateToolUse('sdk-test-1', 'tc-2', {
+      status: 'success',
+      completedAt: 2000,
+      result: 'File edited',
+    })
+
+    expect(handler).toHaveBeenCalledOnce()
+    const entry = store.getToolUse('sdk-test-1')[0]
+    expect(entry.status).toBe('success')
+    expect(entry.completedAt).toBe(2000)
+    expect(entry.result).toBe('File edited')
+  })
+
+  it('getToolUse returns empty array for unknown session', () => {
+    expect(store.getToolUse('nonexistent')).toEqual([])
+  })
+
+  it('updateToolUse silently ignores unknown session/toolCallId', () => {
+    expect(() => store.updateToolUse('nonexistent', 'tc-x', { status: 'error' })).not.toThrow()
+    expect(() => store.updateToolUse('sdk-test-1', 'tc-x', { status: 'error' })).not.toThrow()
+  })
+
+  it('tracks MCP tool with server name', () => {
+    store.addToolUse({
+      id: 'tc-mcp',
+      sessionId: 'sdk-test-1',
+      kind: 'tool',
+      name: 'query_database',
+      source: 'mcp',
+      status: 'running',
+      startedAt: 1000,
+      mcpServerName: 'postgres-server',
+      mcpToolName: 'query_database',
+    })
+
+    const entry = store.getToolUse('sdk-test-1')[0]
+    expect(entry.source).toBe('mcp')
+    expect(entry.mcpServerName).toBe('postgres-server')
+  })
+
+  it('tracks skill with plugin name and version', () => {
+    store.addToolUse({
+      id: 'skill-123',
+      sessionId: 'sdk-test-1',
+      kind: 'skill',
+      name: 'tdd',
+      source: 'skill',
+      status: 'success',
+      startedAt: 1000,
+      completedAt: 1000,
+      pluginName: 'tester-supreme',
+      pluginVersion: '0.2.0',
+    })
+
+    const entry = store.getToolUse('sdk-test-1')[0]
+    expect(entry.kind).toBe('skill')
+    expect(entry.pluginName).toBe('tester-supreme')
+    expect(entry.pluginVersion).toBe('0.2.0')
+  })
+
+  it('tracks subagent lifecycle', () => {
+    store.addToolUse({
+      id: 'sa-1',
+      sessionId: 'sdk-test-1',
+      kind: 'subagent',
+      name: 'Code Reviewer',
+      source: 'built-in',
+      status: 'running',
+      startedAt: 1000,
+    })
+
+    store.updateToolUse('sdk-test-1', 'sa-1', {
+      status: 'success',
+      completedAt: 5000,
+    })
+
+    const entry = store.getToolUse('sdk-test-1')[0]
+    expect(entry.kind).toBe('subagent')
+    expect(entry.status).toBe('success')
+    expect(entry.completedAt! - entry.startedAt).toBe(4000)
+  })
+
+  it('accumulates multiple entries in order', () => {
+    store.addToolUse({ id: 'a', sessionId: 'sdk-test-1', kind: 'tool', name: 'read_file', source: 'built-in', status: 'success', startedAt: 100 })
+    store.addToolUse({ id: 'b', sessionId: 'sdk-test-1', kind: 'skill', name: 'tdd', source: 'skill', status: 'success', startedAt: 200 })
+    store.addToolUse({ id: 'c', sessionId: 'sdk-test-1', kind: 'tool', name: 'edit_file', source: 'built-in', status: 'running', startedAt: 300 })
+
+    const entries = store.getToolUse('sdk-test-1')
+    expect(entries).toHaveLength(3)
+    expect(entries.map(e => e.id)).toEqual(['a', 'b', 'c'])
+  })
+})
