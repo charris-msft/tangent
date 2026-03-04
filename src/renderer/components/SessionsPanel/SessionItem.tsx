@@ -158,7 +158,7 @@ export function SessionItem({
       {/* Close button */}
       {!session.isExternal && !isRenaming && (
         <button
-          onClick={(e) => { e.stopPropagation(); onClose() }}
+          onClick={(e) => { e.stopPropagation(); if (window.confirm(`Close session "${session.name}"?`)) onClose() }}
           className="opacity-0 group-hover:opacity-100 text-xs px-1 rounded hover:bg-[var(--bg-hover)] shrink-0"
           style={{ color: 'var(--text-muted)' }}
         >
@@ -187,7 +187,7 @@ export function SessionItem({
             </button>
           )}
           <button
-            onClick={() => { setContextMenu(null); onClose() }}
+            onClick={() => { setContextMenu(null); if (window.confirm(`Close session "${session.name}"?`)) onClose() }}
             className="w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-hover)] transition-colors"
             style={{ color: 'var(--text-primary)' }}
           >

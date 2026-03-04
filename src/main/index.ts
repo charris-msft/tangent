@@ -36,6 +36,9 @@ sessionStore.on('agent-promoted', ({ id, agentType, ptyId }: { id: string; agent
 })
 
 function createWindow(): void {
+  // Set app identity so Windows taskbar uses the Tangent icon, not the Electron icon
+  app.setAppUserModelId('com.tangent.app')
+
   mainWindow = new BrowserWindow({
     title: 'Tangent',
     width: 1200,
@@ -52,6 +55,20 @@ function createWindow(): void {
       sandbox: false
     }
   })
+
+  // Tell Windows to relaunch via tangent.exe when pinned to taskbar
+  if (process.platform === 'win32') {
+    const tangentExe = join(__dirname, '../../tangent.exe')
+    if (existsSync(tangentExe)) {
+      mainWindow.setAppDetails({
+        appId: 'com.tangent.app',
+        appIconPath: join(__dirname, '../../assets/tangent.ico'),
+        appIconIndex: 0,
+        relaunchCommand: `"${tangentExe}"`,
+        relaunchDisplayName: 'Tangent'
+      })
+    }
+  }
 
   registerIpcHandlers({
     sessionManager,

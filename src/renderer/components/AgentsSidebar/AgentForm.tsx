@@ -60,24 +60,47 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
     if (!showSuggestions || suggestions.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
+      e.stopPropagation()
       setSelectedSuggestion(prev => Math.min(prev + 1, suggestions.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
+      e.stopPropagation()
       setSelectedSuggestion(prev => Math.max(prev - 1, 0))
     } else if (e.key === 'Enter' && selectedSuggestion >= 0) {
       e.preventDefault()
+      e.stopPropagation()
       selectSuggestion(suggestions[selectedSuggestion])
     } else if (e.key === 'Tab' && selectedSuggestion >= 0) {
       e.preventDefault()
+      e.stopPropagation()
       // Tab-complete: set path and trigger new suggestions
       const selected = suggestions[selectedSuggestion]
       setCwdPath(selected + '\\')
       setSelectedSuggestion(-1)
       handleCwdChange(selected + '\\')
     } else if (e.key === 'Escape') {
+      e.stopPropagation()
       setShowSuggestions(false)
     }
   }
+
+  // Scroll selected suggestion into view
+  useEffect(() => {
+    if (selectedSuggestion >= 0 && suggestionsRef.current) {
+      const items = suggestionsRef.current.querySelectorAll('button')
+      items[selectedSuggestion]?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [selectedSuggestion])
+
+  // Pre-fill defaults from config for new agents
+  useEffect(() => {
+    if (!initialValues) {
+      (window as any).tangentAPI.config.get().then((config: any) => {
+        if (!command) setCommand(config.defaultAgentCommand || 'copilot')
+        if (!argsStr) setArgsStr(config.defaultAgentArgs || '--yolo')
+      }).catch(() => {})
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -220,7 +243,7 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
                 className="w-full text-left px-2 py-1 text-xs truncate block"
                 style={{
                   color: 'var(--text-primary)',
-                  background: i === selectedSuggestion ? 'var(--bg-hover)' : 'transparent'
+                  background: i === selectedSuggestion ? 'var(--accent)' : 'transparent'
                 }}
                 onMouseEnter={() => setSelectedSuggestion(i)}
                 onClick={() => selectSuggestion(s)}

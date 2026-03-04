@@ -186,6 +186,8 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
   }, [groups, saveGroups])
 
   const deleteGroup = useCallback((groupId: string) => {
+    const group = groups.find(g => g.id === groupId)
+    if (!group || !window.confirm(`Delete project "${group.name}"?`)) return
     const updated = groups.filter(g => g.id !== groupId)
     saveGroups(updated)
     setOpenGroupIndex(null)
@@ -258,6 +260,8 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
 
   const handleDeleteAgent = useCallback((agentId: string) => {
     if (!openGroup || openGroupIndex === null) return
+    const agent = openGroup.agents.find(a => a.id === agentId)
+    if (!agent || !window.confirm(`Delete agent "${agent.name}"?`)) return
     const updatedAgents = openGroup.agents.filter(a => a.id !== agentId)
     const updated = groups.map((g, i) =>
       i === openGroupIndex ? { ...g, agents: updatedAgents } : g

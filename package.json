@@ -17,7 +17,7 @@
     "package": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder",
     "publish-release": "electron-vite build && electron-builder --publish always",
-    "postinstall": "electron-rebuild"
+    "postinstall": "electron-rebuild && node scripts/patch-electron-icon.js"
   },
   "build": {
     "appId": "com.tangent.app",
@@ -80,7 +80,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "@github/copilot-sdk": "file:vendor/copilot-sdk",
+    "@github/copilot-sdk": "file:../../tools/copilot-sdk/nodejs",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-progress": "^0.2.0",
     "@xterm/addon-search": "^0.16.0",

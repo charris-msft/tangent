@@ -7,6 +7,8 @@ export interface TangentConfig {
   startFolder?: string
   editor?: string
   fontSize?: number
+  defaultAgentCommand?: string
+  defaultAgentArgs?: string
 }
 
 const CONFIG_DIR = join(homedir(), '.tangent')

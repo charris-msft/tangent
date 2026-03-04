@@ -57,6 +57,9 @@ export function useKeyboard(config: KeyboardConfig): void {
 
       // Ctrl+V: paste from clipboard into active terminal
       if ((key === 'v' || key === 'V') && !e.shiftKey && !e.altKey) {
+        // Allow native paste when an input/textarea is focused
+        const activeEl = document.activeElement
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return
         if (activeId) {
           e.preventDefault()
           navigator.clipboard.readText().then(text => {
