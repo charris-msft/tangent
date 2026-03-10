@@ -1,276 +1,175 @@
-# Issues for Copilot CLI Team
+# Feature Request: Client-level session event API for hybrid PTY+SDK consumers
 
-## 1. Expose session metrics via structured output
+## Summary
 
-**Problem:** Tangent (and other terminal hosts) want to display real-time session metrics — token usage, context window %, request count — but Copilot CLI only renders these as human-readable terminal text via `/usage` and `/context` commands. There is no machine-readable channel.
+Terminal hosts that run Copilot CLI in a PTY with `--ui-server --port 0` and connect the SDK to the embedded server need three APIs the SDK doesn't currently provide:
 
-**Current workaround:** Parse terminal output with regex, which is fragile and breaks across versions.
+1. **`client.onSessionEvent()`** — Client-level event handler that fires for ALL `session.event` notifications regardless of session ID matching
+2. **`client.onUserInputRequested()` / `client.onUserInputCompleted()`** — Client-level notification callbacks for `ask_user` tool execution, independent of `session.resume`
+3. **`client.onConnectionStateChange()`** — Observable connection lifecycle events
 
-**Requested solution:** Emit metrics as OSC escape sequences (or similar structured format) that terminal hosts can intercept without visual side effects. For example:
+## Context: The hybrid PTY+SDK architecture
+
+We're building [Tangent](https://github.com/charris-msft/tangent), an Electron terminal app that wraps Copilot CLI. The architecture:
 
 ```
-ESC ] 633 ; Metrics ; {"input_tokens":1234,"output_tokens":567,"cached_tokens":890,"context_pct":42,"requests":3} ST
+PTY (node-pty)                           SDK (CopilotClient)
+┌─────────────────────┐                  ┌──────────────────────┐
+│ copilot --ui-server  │─── TCP ────────▶│ CopilotClient({      │
+│   --port 0           │    port N       │   cliUrl: "localhost" │
+│                      │                 │ })                    │
+│ User sees full TUI   │                 │                       │
+│ (Ink-based terminal) │                 │ Typed session events  │
+└─────────────────────┘                  └──────────────────────┘
 ```
 
-Ideal events:
-- **Per-turn completion:** tokens used (input/output/cached), context window %, cumulative request count
-- **Context compaction:** triggered at what %, how many tokens reclaimed
-- **Rate limit warnings:** remaining requests, reset time
+The PTY handles rendering — the user sees the full Copilot TUI. The SDK connects to the embedded JSON-RPC server for typed events (status, metrics, tool use tracking). This gives the best of both worlds: native TUI experience + deterministic machine-readable events.
 
-This would allow terminal hosts like Tangent to surface metrics in their own UI without scraping rendered text.
+## Problem 1: Session events are silently dropped (session ID mismatch)
 
-## 2. Emit structured status signals for deterministic agent state detection
+`handleSessionEventNotification()` routes events via `this.sessions.get(sessionId)`. But in hybrid mode:
 
-### Problem
+1. SDK connects to the running CLI's embedded server
+2. `getForegroundSessionId()` returns session ID `A`
+3. `resumeSession(A)` sends a `session.resume` RPC — the CLI may return a **different** session ID `B`
+4. SDK stores the session as `this.sessions.set(B, session)`
+5. CLI broadcasts events with session ID `A` (the original)
+6. `this.sessions.get(A)` → `undefined` → **all events silently dropped**
 
-Terminal hosts like Tangent need to know the current state of a Copilot CLI session (idle, processing, waiting for input, running a tool, error) to drive UI indicators. Today there is **no structured signal** from Copilot CLI, so Tangent is forced to infer state by scraping terminal output with regex pattern matching. This is fundamentally fragile:
+In practice, `session.resume` frequently fails with "Session not found" because of a race between TUI session initialization and SDK connection. Even when it succeeds, the ID mismatch causes silent event loss.
 
-**What we're doing today (System B — output scraping):**
+**Impact:** Status detection, metrics, tool use tracking — everything that depends on session events — stops working. The consumer has no indication that events are being dropped.
 
-| State | Detection method | Problem |
-|---|---|---|
-| Processing | Match spinner chars `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` or the word "Thinking" | Spinners are a rendering detail — if Copilot changes to a bar or percentage, detection breaks. "Thinking" can appear in user content. |
-| Tool executing | Match `running tool:`, `Reading file`, `Writing file`, etc. | Exact phrasing is undocumented and changes between versions. |
-| Needs input | Match `(y/n)`, `continue?`, `allow?`, `approve?`, `Enter to confirm`, `Other (type your answer)` | Every new prompt phrasing requires a Tangent update. We're always one release behind. |
-| Agent ready | Match `❯` or `›` prompt chars, then wait 300ms of silence | False positives when these chars appear in output content. The 300ms silence timer adds latency and races with fast output bursts. |
-| Failed | Match `^Error:`, `^FATAL:`, `ENOENT`, etc. — require 2 matches within 3 seconds | Agents routinely print error text as content (e.g., explaining an error to the user). We had to restrict this to only `shell_ready` and `agent_launching` states to avoid false failures. |
+### Proposed API: `client.onSessionEvent()`
 
-**The resulting complexity in Tangent:**
+```typescript
+// Fires for every session.event notification, regardless of session ID matching
+const unsubscribe = client.onSessionEvent((sessionId, event) => {
+  switch (event.type) {
+    case 'assistant.turn_start':
+      updateStatus('processing')
+      break
+    case 'session.idle':
+      updateStatus('idle')
+      break
+    case 'tool.execution_start':
+      showToolInUI(event.data.toolName)
+      break
+    // ... etc
+  }
+})
+```
 
-To make this work even partially, we've built a layered detection system with:
-- 8 regex rules with priority ordering
-- A 500ms minimum hold between transitions (anti-flicker)
-- A 300ms silence timer for prompt detection (anti-false-positive)
-- A 3-second sliding window requiring 2 error matches (hysteresis)
-- State gating that ignores error patterns during agent sessions
-- ANSI stripping (4 regex passes) before pattern matching
-- A 20-line rolling buffer
-- 23 explicitly whitelisted state transitions (invalid ones are silently dropped)
-- A file-watcher system (System A) as an override when available
+Implementation — add at the end of `handleSessionEventNotification()`, after the existing session-level dispatch:
 
-All of this exists because we're parsing human-readable text to extract machine state. **It's ~180 lines of heuristic code that will break whenever Copilot CLI changes its output formatting.**
+```typescript
+// Existing code (keep as-is):
+const session = this.sessions.get(sessionId);
+if (session) {
+    session._dispatchEvent(event);
+}
 
-### What we've built as a workaround (System A — status file)
-
-Because output scraping is unreliable, we designed a file-based protocol as a fallback. Tangent watches `~/.tangent/status/<ptyId>.json` for a status file that the agent can write:
-
-```json
-{
-  "status": "ready" | "processing" | "tool" | "input" | "error",
-  "detail": "Reading src/main/index.ts",
-  "updatedAt": 1708099200000
+// New: fire client-level handlers (no session ID filtering)
+for (const handler of this.sessionEventHandlers) {
+    try {
+        handler(sessionId, event);
+    } catch { /* */ }
 }
 ```
 
-This works perfectly — deterministic, versioned, no parsing ambiguity. But **Copilot CLI doesn't write this file**, so it sits unused and we fall back to fragile regex scraping.
+## Problem 2: No client-level ask_user detection
 
-### Proposed solution: OSC escape sequences for agent state
+The SDK's `onUserInputRequest` config option only works for SDK-managed sessions created via `createSession()`. In hybrid PTY+SDK mode, the TUI manages user input — the SDK just needs to **observe** that an `ask_user` happened (for status indicators like "needs input"), not handle it.
 
-We propose that Copilot CLI emits OSC escape sequences to signal state transitions. This is the standard mechanism for terminal programs to communicate structured data to terminal hosts — it's how shell integration, progress bars, and CWD tracking already work.
-
-**Recommended format using existing ConEmu/iTerm2-style OSC 633 sequences:**
-
-```
-# Agent ready / idle
-ESC ] 633 ; AgentStatus ; ready ST
-
-# Processing user request (LLM thinking/streaming)
-ESC ] 633 ; AgentStatus ; processing ST
-
-# Executing a tool (file read, shell command, etc.)
-ESC ] 633 ; AgentStatus ; tool ; Reading src/index.ts ST
-
-# Waiting for user input (approval prompt, y/n, etc.)
-ESC ] 633 ; AgentStatus ; input ; Allow edit to src/index.ts? ST
-
-# Error state
-ESC ] 633 ; AgentStatus ; error ; Rate limit exceeded ST
-```
-
-**Why OSC:**
-- Already supported by every terminal emulator (invisible to users, parsed by hosts)
-- Copilot CLI already runs inside terminals that handle OSC for shell integration
-- No file I/O, no polling, no race conditions
-- Instant — emitted inline with output, zero latency
-- Forward-compatible — unknown sequences are silently ignored by terminals that don't support them
-
-**State lifecycle for a typical Copilot turn:**
-```
-ready → processing → tool → processing → tool → processing → ready
-                                                      ↘ input → (user responds) → processing → ready
-```
-
-### Impact
-
-If Copilot CLI adopted this, Tangent could **delete ~180 lines of fragile heuristic code** (all of System B's status detection rules, timers, and hysteresis logic) and replace it with a single OSC parser that reads deterministic signals. The status would always be correct, with zero lag, and would never break across Copilot CLI version updates.
-
-### Alternative: custom OSC namespace
-
-If OSC 633 is too crowded, a dedicated namespace works too:
-
-```
-ESC ] 9001 ; status=processing ; detail=Thinking... ST
-ESC ] 9001 ; status=tool ; detail=Reading file src/main/index.ts ST
-ESC ] 9001 ; status=input ; detail=Allow shell command: npm test? ST
-ESC ] 9001 ; status=ready ST
-```
-
-The key requirement is: **any structured, machine-parseable signal emitted inline with terminal output that tells us the current agent state.** The specific encoding matters less than the fact that it exists.
-
-### Copilot SDK as a longer-term solution
-
-The [Copilot SDK](https://github.com/github/copilot-sdk) (`@github/copilot-sdk` on npm) already defines the exact event taxonomy that solves this problem. The SDK communicates with Copilot CLI running in server mode via JSON-RPC over stdio or TCP. Session events are typed TypeScript discriminated unions generated from `session-events.schema.json`.
-
-**Complete event taxonomy from SDK source (`nodejs/src/generated/session-events.ts`):**
-
-The SDK defines 30+ `SessionEvent` types. The ones relevant to status detection are:
-
-| SDK Event Type | Tangent Status | Data Fields | Notes |
-|---|---|---|---|
-| `session.idle` | `agent_ready` | `{}` (ephemeral) | Definitive "ready for input" signal |
-| `session.error` | `failed` | `errorType`, `message`, `stack?`, `statusCode?` | Structured error with stack trace |
-| `session.warning` | *(informational)* | `warningType`, `message` | Non-fatal warnings |
-| `session.shutdown` | `exited` | `shutdownType`, `totalPremiumRequests`, `modelMetrics`, `codeChanges` | Rich shutdown telemetry |
-| `assistant.turn_start` | `processing` | `turnId` | Start of LLM processing |
-| `assistant.message_delta` | `processing` | `messageId`, `deltaContent` | Streaming response tokens (ephemeral) |
-| `assistant.message` | `processing` | `messageId`, `content`, `toolRequests?` | Final assembled message |
-| `assistant.intent` | *(activity update)* | `intent` | Agent's current intent (e.g., "Fixing CSS") |
-| `assistant.reasoning_delta` | `processing` | `reasoningId`, `deltaContent` | Streaming thinking tokens |
-| `assistant.turn_end` | → triggers `session.idle` | `turnId` | End of LLM processing |
-| `assistant.usage` | *(metrics — Issue #1)* | `model`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cost`, `quotaSnapshots` | Per-request token/cost metrics |
-| `tool.execution_start` | `tool_executing` | `toolCallId`, `toolName`, `arguments?`, `mcpServerName?` | Tool name + args for activity display |
-| `tool.execution_progress` | `tool_executing` | `toolCallId`, `progressMessage` | Live progress within a tool |
-| `tool.execution_partial_result` | `tool_executing` | `toolCallId`, `partialOutput` | Streaming tool output |
-| `tool.execution_complete` | `processing` | `toolCallId`, `success`, `result?`, `error?` | Includes structured result content |
-| `subagent.started` | `processing` | `toolCallId`, `agentName`, `agentDisplayName` | Sub-agent spawned |
-| `subagent.completed` | `processing` | `toolCallId`, `agentName` | Sub-agent finished |
-| `subagent.failed` | *(informational)* | `toolCallId`, `error` | Sub-agent error |
-| `session.compaction_start` | *(informational)* | `{}` | Context compaction began |
-| `session.compaction_complete` | *(informational)* | `preCompactionTokens`, `postCompactionTokens`, `tokensRemoved` | Compaction metrics |
-| `session.context_changed` | *(CWD update)* | `cwd`, `gitRoot?`, `repository?`, `branch?` | Replaces OSC CWD tracking |
-| `session.title_changed` | *(activity update)* | `title` | Session title change |
-| `session.usage_info` | *(metrics — Issue #1)* | `tokenLimit`, `currentTokens`, `messagesLength` | Context window utilization |
-| `session.truncation` | *(metrics)* | `tokenLimit`, `tokensRemovedDuringTruncation`, `messagesRemovedDuringTruncation` | Message truncation stats |
-
-The SDK also handles **permission requests** via a dedicated `onPermissionRequest` handler (not an event) — the agent calls this when it needs approval for shell commands, file writes, MCP calls, or URL fetches. This maps directly to Tangent's `needs_input` status. Similarly, **user input requests** via `onUserInputRequest` handle the `ask_user` tool.
-
-**Additionally, the SDK solves Issue #1 (metrics) for free.** The `assistant.usage` event provides per-request token counts, costs, and quota snapshots. The `session.shutdown` event provides complete session-level metrics including total premium requests, API duration, and code changes (lines added/removed, files modified). The `session.usage_info` event provides real-time context window utilization.
-
-**How Tangent would integrate (from actual SDK API in `nodejs/src/session.ts`):**
+### Proposed API: `client.onUserInputRequested()` / `client.onUserInputCompleted()`
 
 ```typescript
-import { CopilotClient } from '@github/copilot-sdk'
-
-// SDK manages CLI process lifecycle automatically
-const client = new CopilotClient({
-  useStdio: true,      // communicate via stdin/stdout pipes
-  cwd: sessionFolder,  // working directory
+// Notification-only: fires when CLI asks user a question (for status tracking)
+client.onUserInputRequested((info) => {
+  console.log(`Question: ${info.question}`)
+  updateStatus('needs_input')
 })
 
-const session = await client.createSession({
-  model: 'gpt-4',
-  streaming: true,     // enable assistant.message_delta events
-
-  // Permission requests → drives needs_input status
-  onPermissionRequest: async (request) => {
-    store.updateStatus(sessionId, 'needs_input')
-    store.updateActivity(sessionId, `${request.kind}: approve?`)
-    const approved = await showPermissionDialog(request)
-    store.updateStatus(sessionId, 'processing')
-    return { kind: approved ? 'approved' : 'denied-interactively-by-user' }
-  },
-
-  // User input requests → drives needs_input status
-  onUserInputRequest: async (request) => {
-    store.updateStatus(sessionId, 'needs_input')
-    const answer = await showInputDialog(request.question, request.choices)
-    return { answer, wasFreeform: !request.choices?.includes(answer) }
-  },
+// Notification-only: fires when user answers (agent resumes)
+client.onUserInputCompleted((info) => {
+  console.log(`Answered: ${info.answer}`)
+  updateStatus('processing')
 })
-
-// Typed event handlers — no regex, no debounce, no heuristics
-session.on('assistant.turn_start', () => {
-  store.updateStatus(sessionId, 'processing')
-})
-
-session.on('assistant.intent', (event) => {
-  store.updateActivity(sessionId, event.data.intent)
-})
-
-session.on('assistant.message_delta', (event) => {
-  // Write streamed text to xterm.js for display
-  terminal.write(event.data.deltaContent)
-})
-
-session.on('tool.execution_start', (event) => {
-  store.updateStatus(sessionId, 'tool_executing')
-  store.updateActivity(sessionId, `${event.data.toolName}`)
-})
-
-session.on('tool.execution_progress', (event) => {
-  store.updateActivity(sessionId, event.data.progressMessage)
-})
-
-session.on('tool.execution_complete', (event) => {
-  // Display tool results (terminal output, file contents, etc.)
-  if (event.data.result?.contents) {
-    for (const content of event.data.result.contents) {
-      if (content.type === 'terminal') terminal.write(content.text)
-    }
-  }
-  store.updateStatus(sessionId, 'processing')
-})
-
-session.on('session.idle', () => {
-  store.updateStatus(sessionId, 'agent_ready')
-})
-
-session.on('session.error', (event) => {
-  store.updateStatus(sessionId, 'failed')
-  store.updateActivity(sessionId, event.data.message)
-})
-
-// Metrics (solves Issue #1)
-session.on('assistant.usage', (event) => {
-  store.updateMetrics(sessionId, {
-    inputTokens: event.data.inputTokens,
-    outputTokens: event.data.outputTokens,
-    cacheReadTokens: event.data.cacheReadTokens,
-    cost: event.data.cost,
-    quota: event.data.quotaSnapshots,
-  })
-})
-
-session.on('session.context_changed', (event) => {
-  store.updateCwd(sessionId, event.data.cwd)
-})
-
-// Send user message
-await session.send({ prompt: userInput })
-
-// Or send and wait for completion
-const response = await session.sendAndWait({ prompt: userInput }, 60_000)
 ```
 
-**This would eliminate the entire StatusEngine for SDK-based sessions** — no SystemB output scraping, no regex rules, no debounce timers, no hysteresis, no transition validation. The SDK provides deterministic, typed events with zero ambiguity.
+These don't provide answers — the TUI handles the actual interaction. Detection works by watching `session.event` notifications for `tool.execution_start` / `tool.execution_complete` with `toolName === "ask_user"`, tracking `toolCallId` to pair start→complete:
 
-**Tradeoffs and open questions:**
+```typescript
+// In handleSessionEventNotification():
+if (event.type === "tool.execution_start" && data?.toolName === "ask_user") {
+    const toolCallId = data?.toolCallId as string;
+    if (toolCallId) this.pendingAskUserCallIds.add(toolCallId);
+    const question = (data?.arguments as any)?.question ?? "User input requested";
+    for (const handler of this.userInputRequestHandlers) {
+        handler({ sessionId, question });
+    }
+}
 
-| Consideration | Details |
+if (event.type === "tool.execution_complete") {
+    const toolCallId = data?.toolCallId as string;
+    if (toolCallId && this.pendingAskUserCallIds.delete(toolCallId)) {
+        const answer = typeof data?.result === 'string'
+            ? data.result : JSON.stringify(data?.result) ?? "";
+        for (const handler of this.userInputCompletedHandlers) {
+            handler({ sessionId, answer });
+        }
+    }
+}
+```
+
+## Problem 3: Connection lifecycle not observable
+
+When connecting to an external server via `cliUrl`, the SDK transitions through states (disconnected → connecting → connected → error → disconnected) but there's no way to observe these. Terminal hosts need this for connection health indicators and reconnection logic.
+
+### Proposed API: `client.onConnectionStateChange()`
+
+```typescript
+type ConnectionState = "disconnected" | "connecting" | "connected" | "error"
+
+interface ConnectionStateChange {
+  previousState: ConnectionState
+  currentState: ConnectionState
+  reason?: string
+  error?: Error
+}
+
+const unsubscribe = client.onConnectionStateChange((change) => {
+  console.log(`${change.previousState} → ${change.currentState}`)
+  if (change.error) console.error(change.error)
+})
+```
+
+## What we use these for in production
+
+With these three APIs, Tangent drives its entire UI from SDK events — no terminal output scraping needed:
+
+| SDK Event / Callback | Tangent Feature |
 |---|---|
-| **Terminal rendering** | Today Tangent gets free terminal rendering because Copilot CLI writes directly to the PTY. With the SDK, Tangent renders `assistant.message_delta` and `tool.execution_complete` content itself via xterm.js. This is actually better — full control over formatting, and tool results include structured `contents` (text, terminal output with exit codes, images, resource links). |
-| **Tool output** | The SDK's `tool.execution_complete` event includes rich `result.contents` with typed entries: `text`, `terminal` (with exit code and cwd), `image` (base64), `resource_link`, and `resource`. This is far richer than what we can scrape from PTY output. |
-| **Permission UX** | The SDK's `onPermissionRequest` handler receives structured `{ kind: "shell" | "write" | "mcp" | "read" | "url" }` requests. Tangent can show a native approval dialog instead of trying to detect `(y/n)` prompts from output text. |
-| **Sub-agents** | The SDK emits `subagent.started/completed/failed` events — Tangent can show which sub-agent is running. Currently invisible via PTY scraping. |
-| **Hooks** | SDK supports `onPreToolUse`, `onPostToolUse`, `onSessionStart`, `onSessionEnd`, `onErrorOccurred` hooks. Tangent could use these to intercept and modify tool behavior or add custom logic. |
-| **Authentication** | SDK supports multiple auth methods: GitHub OAuth (stored from `copilot` CLI login), environment variables (`GH_TOKEN`), and BYOK (bring your own key). Tangent would pass `githubToken` or set `useLoggedInUser: true`. |
-| **Backward compatibility** | The SDK approach is a fundamentally different architecture (API client vs. PTY wrapper). Tangent would need to support both paths during transition — SDK mode for Copilot, PTY+SystemB for shell sessions and Claude Code. |
-| **SDK maturity** | Currently in "Technical Preview". The event schema is auto-generated and well-typed. Available on npm as `@github/copilot-sdk`. |
+| `assistant.turn_start` | Green "processing" status dot |
+| `session.idle` | Yellow "idle" status dot |
+| `tool.execution_start/complete` | Tool Use pane (live list of tools/skills/subagents with durations) |
+| `assistant.usage` | Token count + cost in status bar (e.g., `184.9k/426 $9.00`) |
+| `session.context_changed` | Working directory tracking |
+| `session.title_changed` | Session activity label |
+| `skill.invoked` | Skill entries with plugin name + version |
+| `subagent.started/completed/failed` | Subagent lifecycle tracking |
+| `onUserInputRequested` | Orange pulsing "needs input" status dot |
+| `onUserInputCompleted` | Clears needs_input → processing |
+| `onConnectionStateChange` | SDK connection health monitoring |
 
-**Recommended phased approach:**
+## Working implementation
 
-1. **Now (Issue #2 above):** Ask Copilot CLI to emit OSC escape sequences for status. This is a small, backward-compatible change that works within the existing PTY architecture. It immediately reduces Tangent's fragility.
+We have a tested fork (~275 lines changed in `client.ts`) with all three features working in production. Happy to submit a PR.
 
-2. **Near-term:** Prototype a Copilot SDK integration in Tangent as an alternative session type (`sdk-session` vs. `pty-session`). The SDK manages the CLI process lifecycle automatically via `CopilotClient({ useStdio: true })`. Validate the event taxonomy covers all status needs. Identify gaps.
+### Bonus improvements in our fork
 
-3. **Long-term:** Migrate fully to the SDK for Copilot sessions. Keep the PTY path for raw shell sessions and other agents (Claude Code) that don't have an SDK. SystemB becomes a fallback for non-SDK agents only. The SDK also eliminates the need for Issue #1 (metrics) since `assistant.usage`, `session.usage_info`, and `session.shutdown` events provide all metrics data natively.
+These are smaller quality-of-life fixes we found necessary for the `cliUrl` (external server) use case:
+
+- **`resolveSessionForInboundRequest()`** — Fallback session resolution for inbound RPCs (`user_input.requested`, `permission.requested`) when the session ID doesn't match. Falls back to last foreground session → only active session.
+- **`cliUrl` auth stripping** — Silently ignores `githubToken`/`useLoggedInUser` when connecting to external server (it manages its own auth) instead of throwing.
+- **`getForegroundSessionId()`** — Queries the CLI's foreground session via `session.getForeground` RPC.
