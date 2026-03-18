@@ -43,6 +43,9 @@ export class ContextStore extends EventEmitter {
     const trimmed = text.trim()
     if (!trimmed || trimmed.length < 2) return
 
+    // Filter out agent launch commands — these aren't user prompts
+    if (/^(copilot|claude|gh\s+copilot)\b/i.test(trimmed)) return
+
     const list = this.prompts.get(sessionId) ?? []
 
     // Deduplicate: skip if identical to most recent entry
