@@ -208,7 +208,7 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
 
           // Forward user input to PTY, with line buffer for prompt capture
           let inputBuffer = ''
-          let inEscSeq = false
+          let inEscSeq: false | 'esc' | 'csi' = false
           const onDataDisposable = terminal.onData((data) => {
             window.tangentAPI.terminal.write(session.id, data)
 
@@ -217,13 +217,23 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
             for (const ch of data) {
               const code = ch.charCodeAt(0)
 
-              // Track escape sequences (ESC [ ... letter) to avoid capturing them
+              // Track escape sequences to avoid capturing them as user input.
+              // ESC starts a sequence; for CSI (ESC [), skip until a letter/~ ends it.
+              // For non-CSI escapes (ESC followed by non-[), skip just that one char.
               if (ch === '\x1b') {
-                inEscSeq = true
+                inEscSeq = 'esc'
                 continue
               }
-              if (inEscSeq) {
-                // CSI sequences end with a letter (A-Z, a-z)
+              if (inEscSeq === 'esc') {
+                if (ch === '[' || ch === 'O') {
+                  inEscSeq = 'csi' // CSI or SS3 sequence — wait for terminator
+                } else {
+                  inEscSeq = false // Single-char escape (e.g. ESC =) — done
+                }
+                continue
+              }
+              if (inEscSeq === 'csi') {
+                // CSI/SS3 sequences end with a letter or ~
                 if (/[A-Za-z~]/.test(ch)) inEscSeq = false
                 continue
               }
