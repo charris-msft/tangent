@@ -42,9 +42,9 @@ describe('ContextStore', () => {
       const ctx = contextStore.getContext('ctx-test-1')
       expect(ctx).not.toBeNull()
       expect(ctx!.prompts).toHaveLength(2)
-      // Most recent first
-      expect(ctx!.prompts[0].text).toBe('git status')
-      expect(ctx!.prompts[1].text).toBe('npm test')
+      // Chronological order (oldest first)
+      expect(ctx!.prompts[0].text).toBe('npm test')
+      expect(ctx!.prompts[1].text).toBe('git status')
     })
 
     it('deduplicates consecutive identical prompts', () => {
@@ -82,8 +82,8 @@ describe('ContextStore', () => {
       // getContext returns only last 2 prompts
       const ctx = contextStore.getContext('ctx-test-1')
       expect(ctx!.prompts).toHaveLength(2)
-      expect(ctx!.prompts[0].text).toBe('command-14')
-      expect(ctx!.prompts[1].text).toBe('command-13')
+      expect(ctx!.prompts[0].text).toBe('command-13')
+      expect(ctx!.prompts[1].text).toBe('command-14')
     })
 
     it('emits context-updated event (debounced)', async () => {

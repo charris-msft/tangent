@@ -53,22 +53,13 @@ function PromptItem({ entry }: { entry: PromptEntry }) {
       >
         ›
       </span>
-      <div className="min-w-0 flex-1">
-        <p
-          className="font-mono text-xs leading-relaxed break-all"
-          style={{ color: 'var(--text-secondary)' }}
-          title={entry.text}
-        >
-          {truncated}
-        </p>
-        <span
-          className="text-xs"
-          style={{ color: 'var(--text-muted)', fontSize: '10px' }}
-        >
-          {formatTimeAgo(Date.now() - entry.timestamp)}
-          {entry.source === 'sdk' && ' • SDK'}
-        </span>
-      </div>
+      <p
+        className="font-mono text-xs leading-relaxed break-all min-w-0 flex-1"
+        style={{ color: 'var(--text-secondary)' }}
+        title={entry.text}
+      >
+        {truncated}
+      </p>
     </div>
   )
 }
@@ -77,7 +68,6 @@ function SnapshotBar({ context }: { context: HumanContext }) {
   const { snapshot } = context
   const icon = AGENT_ICONS[snapshot.agentType] || '📋'
   const label = AGENT_LABELS[snapshot.agentType] || snapshot.agentType
-  const timeAgo = formatTimeAgo(snapshot.lastActiveAgo)
   const path = truncatePath(snapshot.folderPath)
 
   const hasMetrics = snapshot.metrics &&
@@ -103,10 +93,6 @@ function SnapshotBar({ context }: { context: HumanContext }) {
         style={{ color: 'var(--text-muted)', maxWidth: '200px' }}
       >
         {path}
-      </span>
-      <span style={{ color: 'var(--text-muted)' }}>•</span>
-      <span style={{ color: 'var(--text-muted)' }}>
-        {timeAgo}
       </span>
       {hasMetrics && (
         <>
@@ -169,8 +155,6 @@ export function HumanContextPanel({ sessionId }: HumanContextPanelProps) {
                 {AGENT_ICONS[context.snapshot.agentType] || '📋'}{' '}
                 {AGENT_LABELS[context.snapshot.agentType] || context.snapshot.agentType}
               </span>
-              <span style={{ color: 'var(--text-muted)' }}>•</span>
-              <span>{formatTimeAgo(context.snapshot.lastActiveAgo)}</span>
             </>
           )}
         </div>

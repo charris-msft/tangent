@@ -208,6 +208,7 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
 
           // Forward user input to PTY, with line buffer for prompt capture
           let inputBuffer = ''
+          let inEscSeq = false
           const onDataDisposable = terminal.onData((data) => {
             window.tangentAPI.terminal.write(session.id, data)
 
@@ -215,6 +216,18 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
             // When the user presses Enter, record accumulated text as a prompt.
             for (const ch of data) {
               const code = ch.charCodeAt(0)
+
+              // Track escape sequences (ESC [ ... letter) to avoid capturing them
+              if (ch === '\x1b') {
+                inEscSeq = true
+                continue
+              }
+              if (inEscSeq) {
+                // CSI sequences end with a letter (A-Z, a-z)
+                if (/[A-Za-z~]/.test(ch)) inEscSeq = false
+                continue
+              }
+
               if (ch === '\r' || ch === '\n') {
                 const trimmed = inputBuffer.trim()
                 if (trimmed.length >= 2) {

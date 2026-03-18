@@ -67,8 +67,8 @@ export class ContextStore extends EventEmitter {
     if (!session) return null
 
     const prompts = this.prompts.get(sessionId) ?? []
-    // Return most recent 2 prompts, newest first
-    const recentPrompts = prompts.slice(-2).reverse()
+    // Return most recent 2 prompts, oldest first (chronological order)
+    const recentPrompts = prompts.slice(-2)
 
     return {
       sessionId,
