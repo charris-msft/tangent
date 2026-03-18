@@ -246,12 +246,14 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
                 inputBuffer = ''
               } else if (ch === '\x7f' || ch === '\b') {
                 inputBuffer = inputBuffer.slice(0, -1)
+              } else if (ch === '\x03') {
+                // Ctrl+C — user abort, clear buffer
+                inputBuffer = ''
               } else if (code >= 32) {
                 inputBuffer += ch
-              } else {
-                // Control characters (Ctrl+C, etc.) — reset
-                inputBuffer = ''
               }
+              // Other control characters are silently ignored — TUIs send
+              // many (tab, bell, form feed, etc.) that shouldn't reset the buffer
             }
           })
           cleanupFns.push(() => onDataDisposable.dispose())
