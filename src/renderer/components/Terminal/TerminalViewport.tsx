@@ -206,9 +206,30 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
           })
           cleanupFns.push(unsubData)
 
-          // Forward user input to PTY
+          // Forward user input to PTY, with line buffer for prompt capture
+          let inputBuffer = ''
           const onDataDisposable = terminal.onData((data) => {
             window.tangentAPI.terminal.write(session.id, data)
+
+            // Build a line buffer to capture prompts for the context panel.
+            // When the user presses Enter, record accumulated text as a prompt.
+            for (const ch of data) {
+              const code = ch.charCodeAt(0)
+              if (ch === '\r' || ch === '\n') {
+                const trimmed = inputBuffer.trim()
+                if (trimmed.length >= 2) {
+                  window.tangentAPI.context.recordPrompt(session.id, trimmed, 'terminal')
+                }
+                inputBuffer = ''
+              } else if (ch === '\x7f' || ch === '\b') {
+                inputBuffer = inputBuffer.slice(0, -1)
+              } else if (code >= 32) {
+                inputBuffer += ch
+              } else {
+                // Control characters (Ctrl+C, etc.) — reset
+                inputBuffer = ''
+              }
+            }
           })
           cleanupFns.push(() => onDataDisposable.dispose())
 
