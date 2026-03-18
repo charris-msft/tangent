@@ -119,7 +119,55 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
         // allowing the window-level useKeyboard handler to process it.
         let sdkLineBuffer: SdkLineBuffer | null = null
 
+        // Prompt history navigation for PTY agent sessions (up/down arrow)
+        let ptyHistory: string[] = []
+        let ptyHistoryIndex = -1
+        let ptyHistoryLoaded = false
+        if (session.kind !== 'copilot-sdk') {
+          // Pre-load history for PTY sessions
+          window.tangentAPI.context.getPrompts(session.id).then((prompts: any[]) => {
+            ptyHistory = prompts.map((p: any) => p.text)
+            ptyHistoryLoaded = true
+          })
+        }
+
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          // Up/Down arrow for prompt history in PTY agent sessions
+          if (!e.ctrlKey && !e.shiftKey && !e.altKey && e.type === 'keydown' &&
+              (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+              session.kind !== 'copilot-sdk' && ptyHistoryLoaded && ptyHistory.length > 0) {
+            // Only intercept for agent sessions (shell sessions have native history)
+            const isAgent = session.kind === 'shell' && false // Let shell sessions use native history
+            const sess = sessions.find(s => s.id === session.id)
+            if (sess && sess.agentType !== 'shell') {
+              if (e.key === 'ArrowUp') {
+                if (ptyHistoryIndex === -1) {
+                  ptyHistoryIndex = ptyHistory.length - 1
+                } else if (ptyHistoryIndex > 0) {
+                  ptyHistoryIndex--
+                } else {
+                  return false // At oldest, do nothing
+                }
+                // Clear current line (Ctrl+U) then type the history entry
+                window.tangentAPI.terminal.write(session.id, '\x15') // Ctrl+U clears line
+                window.tangentAPI.terminal.write(session.id, ptyHistory[ptyHistoryIndex])
+                return false
+              }
+              if (e.key === 'ArrowDown') {
+                if (ptyHistoryIndex === -1) return false // Not browsing
+                if (ptyHistoryIndex < ptyHistory.length - 1) {
+                  ptyHistoryIndex++
+                  window.tangentAPI.terminal.write(session.id, '\x15')
+                  window.tangentAPI.terminal.write(session.id, ptyHistory[ptyHistoryIndex])
+                } else {
+                  // Clear and return to empty prompt
+                  ptyHistoryIndex = -1
+                  window.tangentAPI.terminal.write(session.id, '\x15')
+                }
+                return false
+              }
+            }
+          }
           // Shift+Enter: new line (multiline input for agents)
           if (e.shiftKey && e.key === 'Enter' && !e.ctrlKey && !e.altKey && e.type === 'keydown') {
             if (session.kind === 'copilot-sdk' && sdkLineBuffer) {
@@ -154,7 +202,7 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
             return true // No selection — let xterm handle (PTY: ^C, SDK: line buffer handles it)
           }
           // Let xterm ignore these — they're app shortcuts
-          if (key === 'b' || key === 'n' || key === 'tab' ||
+          if (key === 'b' || key === 'i' || key === 'n' || key === 'tab' ||
               key === '=' || key === '+' || key === '-' || key === '0') {
             return false
           }
@@ -186,6 +234,11 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
               window.tangentAPI.context.recordPrompt(sessionId, line, 'sdk')
             }
           )
+
+          // Load prompt history for up-arrow recall
+          window.tangentAPI.context.getPrompts(sessionId).then((prompts: any[]) => {
+            sdkLineBuffer?.setHistory(prompts.map((p: any) => p.text))
+          })
 
           // SDK output → terminal display
           const unsubSdkOutput = window.tangentAPI.sdk.onOutput(session.id, (data: string) => {
@@ -242,8 +295,10 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
                 const trimmed = inputBuffer.trim()
                 if (trimmed.length >= 2) {
                   window.tangentAPI.context.recordPrompt(session.id, trimmed, 'terminal')
+                  ptyHistory.push(trimmed) // Add to local history for up-arrow
                 }
                 inputBuffer = ''
+                ptyHistoryIndex = -1 // Reset history navigation
               } else if (ch === '\x7f' || ch === '\b') {
                 inputBuffer = inputBuffer.slice(0, -1)
               } else if (ch === '\x03') {

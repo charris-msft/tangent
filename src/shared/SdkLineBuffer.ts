@@ -7,6 +7,9 @@
 export class SdkLineBuffer {
   private line = ''
   private cursorPos = 0
+  private history: string[] = []
+  private historyIndex = -1     // -1 = not browsing history
+  private savedLine = ''        // saves current input when browsing history
 
   constructor(
     private onWrite: (data: string) => void,
@@ -23,6 +26,11 @@ export class SdkLineBuffer {
     return this.cursorPos
   }
 
+  /** Load prompt history from the context store. */
+  setHistory(prompts: string[]): void {
+    this.history = prompts
+  }
+
   /** Handle a keystroke from xterm.onData. Returns true if the event was consumed. */
   handleInput(data: string): boolean {
     // Enter — submit the line
@@ -31,7 +39,10 @@ export class SdkLineBuffer {
       const prompt = this.line
       this.line = ''
       this.cursorPos = 0
+      this.historyIndex = -1
+      this.savedLine = ''
       if (prompt.trim().length > 0) {
+        this.history.push(prompt)
         this.onSubmit(prompt)
       }
       return true
@@ -102,8 +113,35 @@ export class SdkLineBuffer {
         }
         return true
       }
-      // Up/Down arrows — ignore (no history)
-      if (code === 'A' || code === 'B') return true
+      // Up arrow — previous history entry
+      if (code === 'A') {
+        if (this.history.length === 0) return true
+        if (this.historyIndex === -1) {
+          // Save current input before browsing history
+          this.savedLine = this.line
+          this.historyIndex = this.history.length - 1
+        } else if (this.historyIndex > 0) {
+          this.historyIndex--
+        } else {
+          return true // Already at oldest entry
+        }
+        this.replaceLine(this.history[this.historyIndex])
+        return true
+      }
+      // Down arrow — next history entry or restore saved input
+      if (code === 'B') {
+        if (this.historyIndex === -1) return true // Not browsing history
+        if (this.historyIndex < this.history.length - 1) {
+          this.historyIndex++
+          this.replaceLine(this.history[this.historyIndex])
+        } else {
+          // Restore saved input
+          this.historyIndex = -1
+          this.replaceLine(this.savedLine)
+          this.savedLine = ''
+        }
+        return true
+      }
       return true
     }
 
@@ -125,5 +163,25 @@ export class SdkLineBuffer {
     }
 
     return false
+  }
+
+  /** Insert a newline into the buffer (for Shift+Enter multiline input). */
+  insertNewline(): void {
+    this.line += '\n'
+    this.cursorPos = this.line.length
+    this.onWrite('\r\n')
+  }
+
+  /** Replace the current line content with new text (for history navigation). */
+  private replaceLine(text: string): void {
+    // Move cursor to start, clear the line, write new text
+    if (this.cursorPos > 0) {
+      this.onWrite(`\x1b[${this.cursorPos}D`)
+    }
+    // Clear from cursor to end of line
+    this.onWrite('\x1b[K')
+    this.line = text
+    this.cursorPos = text.length
+    this.onWrite(text)
   }
 }

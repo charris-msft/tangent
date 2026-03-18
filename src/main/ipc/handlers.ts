@@ -228,6 +228,7 @@ export function registerIpcHandlers(deps: {
 
   // --- Human Context ---
   ipcMain.handle('context:get', (_, sessionId: string) => contextStore.getContext(sessionId))
+  ipcMain.handle('context:getPrompts', (_, sessionId: string) => contextStore.getPrompts(sessionId))
 
   // Allow renderer to record SDK prompts (since SDK input goes through line buffer in renderer)
   ipcMain.on('context:recordPrompt', (_, sessionId: string, text: string, source: string) => {

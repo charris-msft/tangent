@@ -63,6 +63,14 @@ export class ContextStore extends EventEmitter {
   }
 
   /**
+   * Get all stored prompts for a session (oldest first).
+   * Used for up-arrow history recall in the terminal.
+   */
+  getPrompts(sessionId: string): PromptEntry[] {
+    return this.prompts.get(sessionId) ?? []
+  }
+
+  /**
    * Get the full HumanContext for a session.
    */
   getContext(sessionId: string): HumanContext | null {

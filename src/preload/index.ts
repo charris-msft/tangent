@@ -114,6 +114,7 @@ const tangentAPI = {
 
   context: {
     get: (sessionId: string) => ipcRenderer.invoke('context:get', sessionId),
+    getPrompts: (sessionId: string) => ipcRenderer.invoke('context:getPrompts', sessionId),
     recordPrompt: (sessionId: string, text: string, source: 'terminal' | 'sdk') => {
       ipcRenderer.send('context:recordPrompt', sessionId, text, source)
     },
