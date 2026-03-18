@@ -4,6 +4,7 @@ import { readdirSync, statSync } from 'fs'
 import { join, dirname, basename } from 'path'
 import type { SessionManager } from '../session/SessionManager'
 import type { SessionStore } from '../session/SessionStore'
+import type { ContextStore } from '../session/ContextStore'
 import type { PtyManager } from '../pty/PtyManager'
 import type { AgentStore } from '../agents/AgentStore'
 import type { AgentLauncher } from '../agents/AgentLauncher'
@@ -12,13 +13,14 @@ import type { ConfigStore } from '../config/ConfigStore'
 export function registerIpcHandlers(deps: {
   sessionManager: SessionManager
   sessionStore: SessionStore
+  contextStore: ContextStore
   ptyManager: PtyManager
   agentStore: AgentStore
   agentLauncher: AgentLauncher
   configStore: ConfigStore
   getWindow: () => BrowserWindow | null
 }): void {
-  const { sessionManager, sessionStore, ptyManager, agentStore, agentLauncher, configStore, getWindow } = deps
+  const { sessionManager, sessionStore, contextStore, ptyManager, agentStore, agentLauncher, configStore, getWindow } = deps
 
   // --- Sessions ---
   ipcMain.handle('session:getAll', () => sessionStore.getAll())
@@ -221,6 +223,27 @@ export function registerIpcHandlers(deps: {
         .slice(0, 20)
     } catch {
       return []
+    }
+  })
+
+  // --- Human Context ---
+  ipcMain.handle('context:get', (_, sessionId: string) => contextStore.getContext(sessionId))
+
+  // Allow renderer to record SDK prompts (since SDK input goes through line buffer in renderer)
+  ipcMain.on('context:recordPrompt', (_, sessionId: string, text: string, source: string) => {
+    contextStore.addPrompt(sessionId, text, source as 'terminal' | 'sdk')
+  })
+
+  // Forward context updates to renderer
+  contextStore.on('context-updated', (ctx) => {
+    getWindow()?.webContents.send('context:updated', ctx)
+  })
+
+  // Re-emit context when session status changes (updates resume suggestion)
+  sessionStore.on('updated', (session) => {
+    const ctx = contextStore.getContext(session.id)
+    if (ctx) {
+      getWindow()?.webContents.send('context:updated', ctx)
     }
   })
 }

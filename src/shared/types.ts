@@ -121,6 +121,35 @@ export interface ToolUseEntry {
   parentToolCallId?: string // for nested/subagent calls
 }
 
+// === Human Context (for context-switching users) ===
+
+export type PromptSource = 'terminal' | 'sdk'
+
+export interface PromptEntry {
+  text: string
+  timestamp: number
+  source: PromptSource
+}
+
+export interface ResumeSuggestion {
+  icon: string
+  text: string
+  action?: string
+}
+
+export interface HumanContext {
+  sessionId: string
+  prompts: PromptEntry[]
+  resumeSuggestion: ResumeSuggestion
+  snapshot: {
+    agentType: AgentType
+    status: SessionStatus
+    folderPath: string
+    lastActiveAgo: number
+    metrics?: SessionMetrics
+  }
+}
+
 // === Status File (System A) ===
 
 export interface StatusFile {

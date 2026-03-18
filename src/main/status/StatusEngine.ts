@@ -3,6 +3,7 @@ import { SystemB } from './SystemB'
 import { SystemA } from './SystemA'
 import { CwdTracker } from './CwdTracker'
 import type { SessionStore } from '../session/SessionStore'
+import type { ContextStore } from '../session/ContextStore'
 import type { SessionStatus } from '@shared/types'
 
 /**
@@ -29,7 +30,8 @@ export class StatusEngine {
   constructor(
     private sessionId: string,
     private ptyId: string,
-    private store: SessionStore
+    private store: SessionStore,
+    private contextStore?: ContextStore
   ) {
     this.oscParser = new OscParser()
     this.systemB = new SystemB()
@@ -193,6 +195,8 @@ export class StatusEngine {
       if (session && session.agentType === 'shell') {
         this.store.updateActivity(this.sessionId, command)
       }
+      // Always capture commands into context store for human context panel
+      this.contextStore?.addPrompt(this.sessionId, command, 'terminal')
     })
 
     // Agent detected from output — promote the session

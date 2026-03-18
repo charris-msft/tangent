@@ -112,6 +112,18 @@ const tangentAPI = {
     }
   },
 
+  context: {
+    get: (sessionId: string) => ipcRenderer.invoke('context:get', sessionId),
+    recordPrompt: (sessionId: string, text: string, source: 'terminal' | 'sdk') => {
+      ipcRenderer.send('context:recordPrompt', sessionId, text, source)
+    },
+    onUpdated: (cb: (ctx: any) => void) => {
+      const handler = (_: any, ctx: any) => cb(ctx)
+      ipcRenderer.on('context:updated', handler)
+      return () => { ipcRenderer.removeListener('context:updated', handler) }
+    }
+  },
+
   config: {
     get: () => ipcRenderer.invoke('config:get'),
     update: (key: string, value: unknown) => ipcRenderer.invoke('config:update', { key, value }),

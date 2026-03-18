@@ -7,6 +7,7 @@ import { PtyManager } from './pty/PtyManager'
 import { SessionStore } from './session/SessionStore'
 import { SessionManager } from './session/SessionManager'
 import { SdkSessionManager } from './session/SdkSessionManager'
+import { ContextStore } from './session/ContextStore'
 import { AgentStore } from './agents/AgentStore'
 import { AgentLauncher } from './agents/AgentLauncher'
 import { ConfigStore } from './config/ConfigStore'
@@ -20,12 +21,75 @@ let mainWindow: BrowserWindow | null = null
 const configStore = new ConfigStore()
 const ptyManager = new PtyManager()
 const sessionStore = new SessionStore()
+const contextStore = new ContextStore(sessionStore)
 const sessionManager = new SessionManager(sessionStore, ptyManager)
+sessionManager.setContextStore(contextStore)
 const sdkSessionManager = new SdkSessionManager(sessionStore, ptyManager)
 sessionManager.setSdkManager(sdkSessionManager)
 const agentStore = new AgentStore()
 const agentLauncher = new AgentLauncher(ptyManager, sessionStore, sessionManager)
 const pipeServer = new PipeServer(configStore, agentStore)
+
+/** Persist restorable sessions to disk immediately. Called on every session change. */
+function persistSessions(): void {
+  try {
+    const all = sessionStore.getAll()
+    const activeId = sessionManager.getActiveSessionId()
+    const restorable = all.filter(s => !s.isExternal && s.status !== 'exited')
+    const dir = join(homedir(), '.tangent')
+    mkdirSync(dir, { recursive: true })
+    if (restorable.length > 0) {
+      const activeIndex = restorable.findIndex(s => s.id === activeId)
+      const data = {
+        activeIndex: activeIndex >= 0 ? activeIndex : 0,
+        sessions: restorable.map(s => ({
+          kind: s.kind,
+          name: s.name,
+          folderPath: s.folderPath,
+          folderName: s.folderName,
+          isRenamed: s.isRenamed,
+          agentType: s.agentType,
+          agentCommand: s.agentCommand,
+          agentArgs: s.agentArgs,
+          agentEnv: s.agentEnv
+        }))
+      }
+      writeFileSync(SESSIONS_PATH, JSON.stringify(data, null, 2), 'utf-8')
+    } else {
+      // No restorable sessions — remove stale file
+      if (existsSync(SESSIONS_PATH)) {
+        unlinkSync(SESSIONS_PATH)
+      }
+    }
+  } catch (err) {
+    console.warn('[Tangent] Failed to persist sessions:', err)
+  }
+}
+
+// Debounced session persistence — writes at most once per second
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+function schedulePersist(): void {
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    persistSessions()
+  }, 1000)
+}
+
+function persistNow(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  persistSessions()
+}
+
+// Structural changes: persist immediately
+sessionStore.on('created', () => persistNow())
+sessionStore.on('closed', () => persistNow())
+
+// Other updates (status, rename, agent info, activity, metrics): debounced
+sessionStore.on('updated', () => schedulePersist())
 
 // When an agent is auto-detected from output (user typed `copilot` manually),
 // attach the SDK to watch for the ui-server port
@@ -73,6 +137,7 @@ function createWindow(): void {
   registerIpcHandlers({
     sessionManager,
     sessionStore,
+    contextStore,
     ptyManager,
     agentStore,
     agentLauncher,
@@ -202,7 +267,6 @@ app.whenReady().then(async () => {
         }
 
         restored = true
-        unlinkSync(SESSIONS_PATH)
       }
     }
   } catch (err) {
@@ -215,33 +279,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
-  // Save restorable sessions to disk
-  try {
-    const all = sessionStore.getAll()
-    const activeId = sessionManager.getActiveSessionId()
-    const restorable = all.filter(s => !s.isExternal && s.status !== 'exited')
-    if (restorable.length > 0) {
-      const activeIndex = restorable.findIndex(s => s.id === activeId)
-      const data = {
-        activeIndex: activeIndex >= 0 ? activeIndex : 0,
-        sessions: restorable.map(s => ({
-          kind: s.kind,
-          name: s.name,
-          folderPath: s.folderPath,
-          folderName: s.folderName,
-          isRenamed: s.isRenamed,
-          agentType: s.agentType,
-          agentCommand: s.agentCommand,
-          agentArgs: s.agentArgs,
-          agentEnv: s.agentEnv
-        }))
-      }
-      mkdirSync(join(homedir(), '.tangent'), { recursive: true })
-      writeFileSync(SESSIONS_PATH, JSON.stringify(data, null, 2), 'utf-8')
-    }
-  } catch (err) {
-    console.warn('[Tangent] Failed to save sessions:', err)
-  }
+  persistNow()
 })
 
 app.on('window-all-closed', () => {

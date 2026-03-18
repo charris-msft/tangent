@@ -2,6 +2,7 @@ import { v4 as uuid } from 'uuid'
 import path from 'path'
 import { SessionStore } from './SessionStore'
 import { SdkSessionManager } from './SdkSessionManager'
+import { ContextStore } from './ContextStore'
 import { PtyManager } from '../pty/PtyManager'
 import { StatusEngine } from '../status/StatusEngine'
 import { ExternalScanner } from './ExternalScanner'
@@ -12,6 +13,7 @@ export class SessionManager {
   private engines = new Map<string, StatusEngine>()
   private externalScanner = new ExternalScanner()
   private _sdkManager: SdkSessionManager | null = null
+  private _contextStore: ContextStore | null = null
 
   constructor(
     private store: SessionStore,
@@ -34,6 +36,14 @@ export class SessionManager {
         engine?.handlePtyExit(exitCode)
       }
     })
+  }
+
+  setContextStore(contextStore: ContextStore): void {
+    this._contextStore = contextStore
+  }
+
+  get contextStore(): ContextStore | null {
+    return this._contextStore
   }
 
   setSdkManager(sdkManager: SdkSessionManager): void {
@@ -76,7 +86,7 @@ export class SessionManager {
     this.store.add(session)
 
     // Create a StatusEngine for the session after adding to store
-    const engine = new StatusEngine(sessionId, ptyId, this.store)
+    const engine = new StatusEngine(sessionId, ptyId, this.store, this._contextStore ?? undefined)
     this.engines.set(sessionId, engine)
 
     this.activeSessionId = sessionId

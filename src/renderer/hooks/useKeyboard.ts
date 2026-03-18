@@ -13,6 +13,7 @@ export interface KeyboardConfig {
   setFontSize: (fn: (prev: number) => number) => void
   toggleSessionsPanel: () => void
   toggleSidebar: () => void
+  toggleContextPanel: () => void
   launchAgentByIndex: (index: number) => void
 }
 
@@ -21,6 +22,7 @@ export interface KeyboardConfig {
  *
  * Shortcuts:
  *   Ctrl+B          Toggle sessions panel visibility
+ *   Ctrl+I          Toggle human context panel
  *   Ctrl+N          New session
  *   Ctrl+Shift+W    Close active session
  *   Ctrl+W          Delete previous word (passed to terminal)
@@ -45,6 +47,7 @@ export function useKeyboard(config: KeyboardConfig): void {
     setFontSize,
     toggleSessionsPanel,
     toggleSidebar,
+    toggleContextPanel,
     launchAgentByIndex
   } = config
 
@@ -76,6 +79,15 @@ export function useKeyboard(config: KeyboardConfig): void {
         if (!e.shiftKey && !e.altKey) {
           e.preventDefault()
           toggleSessionsPanel()
+          return
+        }
+      }
+
+      // Ctrl+I: toggle human context panel
+      if (key === 'i' || key === 'I') {
+        if (!e.shiftKey && !e.altKey) {
+          e.preventDefault()
+          toggleContextPanel()
           return
         }
       }
@@ -172,6 +184,7 @@ export function useKeyboard(config: KeyboardConfig): void {
       setFontSize,
       toggleSessionsPanel,
       toggleSidebar,
+      toggleContextPanel,
       launchAgentByIndex
     ]
   )

@@ -117,7 +117,18 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
         // Intercept app shortcuts BEFORE xterm processes them.
         // Returning false tells xterm to NOT handle the key event,
         // allowing the window-level useKeyboard handler to process it.
+        let sdkLineBuffer: SdkLineBuffer | null = null
+
         terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          // Shift+Enter: new line (multiline input for agents)
+          if (e.shiftKey && e.key === 'Enter' && !e.ctrlKey && !e.altKey && e.type === 'keydown') {
+            if (session.kind === 'copilot-sdk' && sdkLineBuffer) {
+              sdkLineBuffer.insertNewline()
+            } else {
+              window.tangentAPI.terminal.write(session.id, '\n')
+            }
+            return false
+          }
           // Ctrl+Backspace: delete previous word (send ^W to PTY)
           if (e.ctrlKey && e.key === 'Backspace' && !e.shiftKey && !e.altKey && e.type === 'keydown') {
             window.tangentAPI.terminal.write(session.id, '\x17')
@@ -167,9 +178,13 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
         if (session.kind === 'copilot-sdk') {
           // === SDK session: line-buffered input, SDK output ===
           const sessionId = session.id
-          const lineBuffer = new SdkLineBuffer(
+          sdkLineBuffer = new SdkLineBuffer(
             (data) => terminal.write(data),
-            (line) => window.tangentAPI.sdk.sendMessage(sessionId, line)
+            (line) => {
+              window.tangentAPI.sdk.sendMessage(sessionId, line)
+              // Record prompt for the human context panel
+              window.tangentAPI.context.recordPrompt(sessionId, line, 'sdk')
+            }
           )
 
           // SDK output → terminal display
@@ -180,7 +195,7 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
 
           // User keystrokes → line buffer (local echo + send on Enter)
           const onDataDisposable = terminal.onData((data) => {
-            lineBuffer.handleInput(data)
+            sdkLineBuffer!.handleInput(data)
           })
           cleanupFns.push(() => onDataDisposable.dispose())
         } else {

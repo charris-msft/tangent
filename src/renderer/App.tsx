@@ -10,6 +10,7 @@ import { StatusBar } from '@/components/StatusBar/StatusBar'
 import { SettingsPanel } from '@/components/SettingsPanel/SettingsPanel'
 import { PermissionDialog } from '@/components/PermissionDialog'
 import { UserInputDialog } from '@/components/UserInputDialog'
+import { HumanContextPanel } from '@/components/HumanContextPanel/HumanContextPanel'
 import { ZOOM } from '@shared/constants'
 import type { AgentProfile, Session } from '@shared/types'
 
@@ -22,6 +23,7 @@ export function App(): JSX.Element {
   const [sessionsPanelWidth, setSessionsPanelWidth] = useState(240)
   const [prefillAgent, setPrefillAgent] = useState<AgentProfile | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [contextPanelVisible, setContextPanelVisible] = useState(true)
 
   const handleCreateAgentFromSession = useCallback((session: Session) => {
     const command = session.agentCommand || ''
@@ -45,6 +47,10 @@ export function App(): JSX.Element {
 
   const toggleSessionsPanel = useCallback(() => {
     setSessionsPanelVisible(prev => !prev)
+  }, [])
+
+  const toggleContextPanel = useCallback(() => {
+    setContextPanelVisible(prev => !prev)
   }, [])
 
   const toggleSidebar = useCallback(() => {
@@ -71,6 +77,7 @@ export function App(): JSX.Element {
     setFontSize,
     toggleSessionsPanel,
     toggleSidebar,
+    toggleContextPanel,
     launchAgentByIndex
   })
 
@@ -91,7 +98,12 @@ export function App(): JSX.Element {
             onCollapse={() => setSessionsPanelVisible(false)}
           />
         )}
-        <TerminalViewport sessions={sessions} activeId={activeId} fontSize={fontSize} />
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {contextPanelVisible && (
+            <HumanContextPanel sessionId={activeId} />
+          )}
+          <TerminalViewport sessions={sessions} activeId={activeId} fontSize={fontSize} />
+        </div>
         <AgentsSidebar activeSessionId={activeId} prefillAgent={prefillAgent} onPrefillConsumed={() => setPrefillAgent(null)} />
       </div>
       <StatusBar sessions={sessions} activeSession={activeSession} onToggleSettings={toggleSettings} />
