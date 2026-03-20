@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useHumanContext } from '@/hooks/useHumanContext'
+import { searchRegistry, terminalRegistry } from '@/components/Terminal/TerminalViewport'
 import type { HumanContext, PromptEntry } from '@shared/types'
 
 interface HumanContextPanelProps {
@@ -40,13 +41,36 @@ function truncatePath(p: string, maxLen: number = 40): string {
   return `${head}\\...\\${tail}`
 }
 
-function PromptItem({ entry }: { entry: PromptEntry }) {
+function PromptItem({ entry, sessionId }: { entry: PromptEntry; sessionId: string | null }) {
   const truncated = entry.text.length > 120
     ? entry.text.slice(0, 117) + '...'
     : entry.text
 
+  const handleClick = () => {
+    if (!sessionId) return
+    const searchAddon = searchRegistry.get(sessionId)
+    if (!searchAddon) return
+    // Use first 200 chars to avoid overly long search queries
+    const query = entry.text.slice(0, 200)
+    // findPrevious searches bottom-up, so it finds the most recent occurrence
+    searchAddon.findPrevious(query, { caseSensitive: false, regex: false })
+    // Refocus the terminal so the user can continue working
+    const terminal = terminalRegistry.get(sessionId)
+    terminal?.focus()
+  }
+
   return (
-    <div className="flex items-start gap-2 min-w-0">
+    <div
+      className="flex items-start gap-2 min-w-0 cursor-pointer rounded px-1 -mx-1 transition-colors"
+      style={{ color: 'var(--text-secondary)' }}
+      onClick={handleClick}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-hover)' }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick() }}
+      title="Click to find in terminal"
+    >
       <span
         className="shrink-0 mt-0.5 text-xs"
         style={{ color: 'var(--text-muted)' }}
@@ -55,8 +79,6 @@ function PromptItem({ entry }: { entry: PromptEntry }) {
       </span>
       <p
         className="font-mono text-xs leading-relaxed break-all min-w-0 flex-1"
-        style={{ color: 'var(--text-secondary)' }}
-        title={entry.text}
       >
         {truncated}
       </p>
@@ -179,7 +201,7 @@ export function HumanContextPanel({ sessionId }: HumanContextPanelProps) {
         {context && context.prompts.length > 0 && (
           <div className="space-y-1.5">
             {context.prompts.map((p, i) => (
-              <PromptItem key={`${p.timestamp}-${i}`} entry={p} />
+              <PromptItem key={`${p.timestamp}-${i}`} entry={p} sessionId={sessionId} />
             ))}
           </div>
         )}
