@@ -148,6 +148,87 @@ const tangentAPI = {
       ipcRenderer.on('app:zoomChanged', handler)
       return () => { ipcRenderer.removeListener('app:zoomChanged', handler) }
     }
+  },
+
+  devbox: {
+    list: () => ipcRenderer.invoke('devbox:list'),
+    start: (projectName: string, devBoxName: string) =>
+      ipcRenderer.invoke('devbox:start', projectName, devBoxName),
+    stop: (projectName: string, devBoxName: string) =>
+      ipcRenderer.invoke('devbox:stop', projectName, devBoxName),
+    getConnectionInfo: (projectName: string, devBoxName: string) =>
+      ipcRenderer.invoke('devbox:getConnectionInfo', projectName, devBoxName),
+    checkHealth: (projectName: string, devBoxName: string) =>
+      ipcRenderer.invoke('devbox:checkHealth', projectName, devBoxName),
+    autoStart: (projectName: string, devBoxName: string, reportProgress = false) =>
+      ipcRenderer.invoke('devbox:autoStart', projectName, devBoxName, reportProgress),
+
+    onStateChanged: (cb: (data: { devBoxName: string; state: string }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:stateChanged', handler)
+      return () => { ipcRenderer.removeListener('devbox:stateChanged', handler) }
+    },
+    onHealthUpdated: (cb: (data: { devBoxName: string; health: any }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:healthUpdated', handler)
+      return () => { ipcRenderer.removeListener('devbox:healthUpdated', handler) }
+    },
+    onError: (cb: (data: { devBoxName: string; error: string }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:error', handler)
+      return () => { ipcRenderer.removeListener('devbox:error', handler) }
+    },
+    onAutoStartProgress: (cb: (data: {
+      projectName: string
+      devBoxName: string
+      state: string
+      elapsed: number
+    }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:autoStartProgress', handler)
+      return () => { ipcRenderer.removeListener('devbox:autoStartProgress', handler) }
+    }
+  },
+
+  acp: {
+    respondPermission: (requestId: string, approved: boolean, rememberChoice = false) => {
+      ipcRenderer.send('acp:permission-response', {
+        requestId,
+        approved,
+        rememberChoice
+      })
+    },
+
+    onPermissionRequest: (cb: (request: any) => void) => {
+      const handler = (_: any, request: any) => cb(request)
+      ipcRenderer.on('acp:permission-request', handler)
+      return () => { ipcRenderer.removeListener('acp:permission-request', handler) }
+    },
+    onConnected: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('acp:connected', handler)
+      return () => { ipcRenderer.removeListener('acp:connected', handler) }
+    },
+    onDisconnected: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('acp:disconnected', handler)
+      return () => { ipcRenderer.removeListener('acp:disconnected', handler) }
+    },
+    onSessionCreated: (cb: (session: any) => void) => {
+      const handler = (_: any, session: any) => cb(session)
+      ipcRenderer.on('acp:session-created', handler)
+      return () => { ipcRenderer.removeListener('acp:session-created', handler) }
+    },
+    onMessage: (cb: (response: any) => void) => {
+      const handler = (_: any, response: any) => cb(response)
+      ipcRenderer.on('acp:message', handler)
+      return () => { ipcRenderer.removeListener('acp:message', handler) }
+    },
+    onError: (cb: (error: { message: string; stack?: string }) => void) => {
+      const handler = (_: any, error: any) => cb(error)
+      ipcRenderer.on('acp:error', handler)
+      return () => { ipcRenderer.removeListener('acp:error', handler) }
+    }
   }
 }
 

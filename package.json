@@ -80,7 +80,9 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^0.18.2",
     "@github/copilot-sdk": "file:../../tools/copilot-sdk/nodejs",
+    "@microsoft/devbox-mcp": "^0.0.3-alpha.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-progress": "^0.2.0",
     "@xterm/addon-search": "^0.16.0",
@@ -89,8 +91,10 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.564.0",
     "node-pty": "^1.1.0",
+    "node-rsync": "^1.0.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "ssh2": "^1.17.0",
     "tailwind-merge": "^3.4.0",
     "uuid": "^13.0.0"
   }

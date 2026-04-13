@@ -19,3 +19,36 @@ Installed all 4 npm packages for the remote agent offloading feature:
 - **node-rsync** (v1.0.3) — Node.js rsync wrapper for workspace sync (P3.1)
 
 All packages existed on npm and installed successfully (added 323 packages total). No missing packages to document.
+
+### 2026-04-13 — IPC Handlers for DevBox + ACP Permission Bridge (P1.5 + P2.8)
+
+Wired up IPC integration for Dev Box operations and ACP permission dialogs:
+
+**DevBox IPC handlers (P1.5):**
+- `devbox:list` → DevBoxManager.listDevBoxes()
+- `devbox:start` → DevBoxManager.startDevBox(projectName, devBoxName)
+- `devbox:stop` → DevBoxManager.stopDevBox(projectName, devBoxName)
+- `devbox:getConnectionInfo` → DevBoxManager.getConnectionInfo(projectName, devBoxName)
+- `devbox:checkHealth` → DevBoxManager.checkHealth(projectName, devBoxName)
+- `devbox:autoStart` → DevBoxManager.autoStart(projectName, devBoxName, progressCallback)
+- Forward DevBoxManager events (`state-changed`, `health-updated`, `error`) to renderer via webContents.send
+
+**ACP Permission Bridge (P2.8):**
+- `acp:permission-response` (renderer → main) → AcpClient.respondToPermission()
+- Forward AcpClient events (`permission-request`, `connected`, `disconnected`, `session-created`, `message`, `error`) to renderer
+- Established full bidirectional permission flow: AcpClient request → IPC push to renderer → UI dialog → renderer response → IPC send → AcpClient resolve
+
+**Preload API namespaces added:**
+- `tangentAPI.devbox.*` — 6 invoke methods + 4 event listeners
+- `tangentAPI.acp.*` — 1 send method (respondPermission) + 6 event listeners
+
+**Pattern adherence:**
+- Followed existing handler registration patterns (ipcMain.handle for request-reply, ipcMain.on for fire-and-forget)
+- Used webContents.send for push events with unsubscribe pattern in preload
+- Optional deps check (`if (!devBoxManager)`) with graceful fallbacks
+- Auto-start progress callback uses optional `reportProgress` flag to avoid spamming renderer
+
+**Integration readiness:**
+- DevBox UI can now invoke lifecycle operations and subscribe to state changes
+- ACP permission dialogs can be triggered from main and approved/denied from renderer
+- Both managers are optional (undefined checks) for environments where they're not initialized yet

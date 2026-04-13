@@ -9,6 +9,10 @@ import type { PtyManager } from '../pty/PtyManager'
 import type { AgentStore } from '../agents/AgentStore'
 import type { AgentLauncher } from '../agents/AgentLauncher'
 import type { ConfigStore } from '../config/ConfigStore'
+import type { DevBoxManager } from '../devbox/DevBoxManager'
+import type { AcpClient } from '../devbox/AcpClient'
+import type { DevBoxProvisioningState } from '../../shared/devbox-types'
+import type { AcpPermissionResponse } from '../../shared/acp-types'
 
 export function registerIpcHandlers(deps: {
   sessionManager: SessionManager
@@ -18,9 +22,11 @@ export function registerIpcHandlers(deps: {
   agentStore: AgentStore
   agentLauncher: AgentLauncher
   configStore: ConfigStore
+  devBoxManager?: DevBoxManager
+  acpClient?: AcpClient
   getWindow: () => BrowserWindow | null
 }): void {
-  const { sessionManager, sessionStore, contextStore, ptyManager, agentStore, agentLauncher, configStore, getWindow } = deps
+  const { sessionManager, sessionStore, contextStore, ptyManager, agentStore, agentLauncher, configStore, devBoxManager, acpClient, getWindow } = deps
 
   // --- Sessions ---
   ipcMain.handle('session:getAll', () => sessionStore.getAll())
@@ -247,4 +253,112 @@ export function registerIpcHandlers(deps: {
       getWindow()?.webContents.send('context:updated', ctx)
     }
   })
+
+  // --- DevBox ---
+  ipcMain.handle('devbox:list', async () => {
+    if (!devBoxManager) return []
+    return devBoxManager.listDevBoxes()
+  })
+
+  ipcMain.handle('devbox:start', async (_, projectName: string, devBoxName: string) => {
+    if (!devBoxManager) return false
+    return devBoxManager.startDevBox(projectName, devBoxName)
+  })
+
+  ipcMain.handle('devbox:stop', async (_, projectName: string, devBoxName: string) => {
+    if (!devBoxManager) return false
+    return devBoxManager.stopDevBox(projectName, devBoxName)
+  })
+
+  ipcMain.handle('devbox:getConnectionInfo', async (_, projectName: string, devBoxName: string) => {
+    if (!devBoxManager) return null
+    return devBoxManager.getConnectionInfo(projectName, devBoxName)
+  })
+
+  ipcMain.handle('devbox:checkHealth', async (_, projectName: string, devBoxName: string) => {
+    if (!devBoxManager) {
+      return {
+        isHealthy: false,
+        sshReachable: false,
+        acpReachable: false,
+        lastCheckAt: Date.now(),
+        error: 'DevBoxManager not initialized'
+      }
+    }
+    return devBoxManager.checkHealth(projectName, devBoxName)
+  })
+
+  ipcMain.handle('devbox:autoStart', async (
+    _,
+    projectName: string,
+    devBoxName: string,
+    reportProgress: boolean
+  ) => {
+    if (!devBoxManager) return false
+
+    const progressCallback = reportProgress
+      ? (state: DevBoxProvisioningState, elapsed: number) => {
+          getWindow()?.webContents.send('devbox:autoStartProgress', {
+            projectName,
+            devBoxName,
+            state,
+            elapsed
+          })
+        }
+      : undefined
+
+    return devBoxManager.autoStart(projectName, devBoxName, progressCallback)
+  })
+
+  // Forward DevBox events to renderer
+  if (devBoxManager) {
+    devBoxManager.on('devbox:state-changed', (devBoxName, state) => {
+      getWindow()?.webContents.send('devbox:stateChanged', { devBoxName, state })
+    })
+
+    devBoxManager.on('devbox:health-updated', (devBoxName, health) => {
+      getWindow()?.webContents.send('devbox:healthUpdated', { devBoxName, health })
+    })
+
+    devBoxManager.on('devbox:error', (devBoxName, error) => {
+      getWindow()?.webContents.send('devbox:error', { devBoxName, error })
+    })
+  }
+
+  // --- ACP ---
+  ipcMain.on('acp:permission-response', (_, response: AcpPermissionResponse) => {
+    if (acpClient) {
+      acpClient.respondToPermission(response)
+    }
+  })
+
+  // Forward ACP permission requests to renderer
+  if (acpClient) {
+    acpClient.on('acp:permission-request', (request) => {
+      getWindow()?.webContents.send('acp:permission-request', request)
+    })
+
+    acpClient.on('acp:connected', () => {
+      getWindow()?.webContents.send('acp:connected')
+    })
+
+    acpClient.on('acp:disconnected', () => {
+      getWindow()?.webContents.send('acp:disconnected')
+    })
+
+    acpClient.on('acp:session-created', (session) => {
+      getWindow()?.webContents.send('acp:session-created', session)
+    })
+
+    acpClient.on('acp:message', (response) => {
+      getWindow()?.webContents.send('acp:message', response)
+    })
+
+    acpClient.on('acp:error', (error) => {
+      getWindow()?.webContents.send('acp:error', {
+        message: error.message,
+        stack: error.stack
+      })
+    })
+  }
 }

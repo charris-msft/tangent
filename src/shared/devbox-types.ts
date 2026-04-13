@@ -1,0 +1,99 @@
+// === Dev Box Resource Types ===
+
+/**
+ * Provisioning state of a Dev Box resource.
+ * Matches Azure Dev Center API states.
+ */
+export type DevBoxProvisioningState =
+  | 'Creating'
+  | 'Starting'
+  | 'Running'
+  | 'Stopping'
+  | 'Stopped'
+  | 'Failed'
+  | 'Deleting'
+  | 'Deleted'
+
+/**
+ * Health status of a Dev Box.
+ * Used for connection validation and monitoring.
+ */
+export interface DevBoxHealthStatus {
+  isHealthy: boolean
+  sshReachable: boolean
+  acpReachable: boolean
+  lastCheckAt?: number
+  error?: string
+}
+
+/**
+ * Connection information for a Dev Box.
+ * Includes SSH details and port configuration.
+ */
+export interface DevBoxConnectionInfo {
+  ipAddress: string
+  sshHost: string
+  sshPort: number
+  sshUser: string
+  acpPort?: number
+}
+
+/**
+ * Dev Box resource entity.
+ * Represents a single Dev Box from Azure Dev Center.
+ */
+export interface DevBoxResource {
+  id: string
+  name: string
+  projectName: string
+  poolName: string
+  state: DevBoxProvisioningState
+  connectionInfo?: DevBoxConnectionInfo
+  createdAt?: number
+  lastUsedAt?: number
+  osType: 'Windows' | 'Linux'
+  location: string
+  healthStatus?: DevBoxHealthStatus
+}
+
+/**
+ * Dev Box project container.
+ * Groups Dev Boxes by Azure Dev Center project.
+ */
+export interface DevBoxProject {
+  name: string
+  description?: string
+  devBoxes: DevBoxResource[]
+}
+
+/**
+ * User configuration for a Dev Box.
+ * Stored in agent profile's `remote.devBox` field.
+ */
+export interface DevBoxConfig {
+  projectName: string
+  devBoxName: string
+  autoStart?: boolean
+  autoStop?: boolean
+  stopDelayMinutes?: number
+  sshKeyPath?: string
+}
+
+/**
+ * Provisioning consent record.
+ * Tracks user consent for first-time Dev Box setup.
+ */
+export interface DevBoxProvisioningConsent {
+  devBoxName: string
+  consentedAt: number
+  changes: string[]
+}
+
+/**
+ * Dev Box sync configuration.
+ * Glob patterns for excluding files from workspace sync.
+ */
+export interface DevBoxSyncConfig {
+  version: 1
+  excludePatterns: string[]
+}

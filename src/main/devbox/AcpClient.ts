@@ -1,0 +1,496 @@
+import { EventEmitter } from 'events'
+import { ClientSideConnection, type Client, type Stream, ndJsonStream } from '@agentclientprotocol/sdk'
+import type * as schema from '@agentclientprotocol/sdk'
+import type {
+  AcpConnectionOptions,
+  AcpSessionConfig,
+  AcpSession,
+  AcpPermissionRequest,
+  AcpPermissionResponse,
+  AcpAgentResponse,
+  AcpConnectionState
+} from '@shared/acp-types'
+
+/**
+ * Events emitted by AcpClient:
+ * - 'acp:connected' - Successfully connected to ACP agent
+ * - 'acp:disconnected' - Disconnected from ACP agent
+ * - 'acp:session-created' - New ACP session created (session: AcpSession)
+ * - 'acp:message' - Message received from agent (response: AcpAgentResponse)
+ * - 'acp:permission-request' - Agent requests permission (request: AcpPermissionRequest)
+ * - 'acp:error' - Error occurred (error: Error)
+ */
+export class AcpClient extends EventEmitter {
+  private connection: ClientSideConnection | null = null
+  private state: AcpConnectionState = 'disconnected'
+  private sessions = new Map<string, AcpSession>()
+  private tangentToAcpSessionMap = new Map<string, string>()
+  private acpToTangentSessionMap = new Map<string, string>()
+  private pendingPermissionRequests = new Map<string, (response: AcpPermissionResponse) => void>()
+
+  /**
+   * Connect to an ACP agent over the provided stream.
+   * For Dev Box, this will be an SSH-tunneled connection.
+   */
+  async connect(options: AcpConnectionOptions): Promise<void> {
+    if (this.connection) {
+      console.warn('[Tangent 2] AcpClient: Already connected')
+      return
+    }
+
+    try {
+      this.state = 'connecting'
+
+      // For Dev Box integration, we expect options to include connection details.
+      // The actual stream creation (SSH tunnel + stdio) will be handled by DevBoxManager.
+      // This method accepts a pre-configured stream.
+      // For now, we'll create a placeholder that throws until DevBoxManager provides the stream.
+      throw new Error('Stream creation not yet implemented - DevBoxManager should provide stream')
+    } catch (err) {
+      this.state = 'failed'
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Connection failed:', error.message)
+      this.emit('acp:error', error)
+      throw error
+    }
+  }
+
+  /**
+   * Connect with a pre-configured stream (for testing or when DevBoxManager provides the stream).
+   */
+  async connectWithStream(stream: Stream): Promise<void> {
+    if (this.connection) {
+      console.warn('[Tangent 2] AcpClient: Already connected')
+      return
+    }
+
+    try {
+      this.state = 'connecting'
+
+      // Create Client handler for incoming agent requests
+      const client: Client = {
+        requestPermission: async (params: schema.RequestPermissionRequest) => {
+          return this.handlePermissionRequest(params)
+        },
+        sessionUpdate: async (notification: schema.SessionNotification) => {
+          await this.handleSessionUpdate(notification)
+        }
+      }
+
+      // Create the connection
+      this.connection = new ClientSideConnection(() => client, stream)
+
+      // Initialize the connection
+      const initResponse = await this.connection.initialize({
+        protocolVersion: '1.0',
+        clientInfo: {
+          name: 'Tangent',
+          version: '2.0.0'
+        },
+        capabilities: {
+          // Advertise capabilities Tangent supports
+          experimental: {}
+        }
+      })
+
+      this.state = 'connected'
+      this.emit('acp:connected')
+
+      // Set up connection closed handler
+      this.connection.closed
+        .then(() => {
+          this.state = 'disconnected'
+          this.emit('acp:disconnected')
+          this.connection = null
+        })
+        .catch((err) => {
+          this.state = 'failed'
+          const error = err instanceof Error ? err : new Error(String(err))
+          console.warn('[Tangent 2] AcpClient: Connection closed with error:', error.message)
+          this.emit('acp:error', error)
+          this.connection = null
+        })
+    } catch (err) {
+      this.state = 'failed'
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Connection failed:', error.message)
+      this.emit('acp:error', error)
+      throw error
+    }
+  }
+
+  /**
+   * Create a new ACP session with workspace context.
+   * Maps a Tangent session ID to an ACP session ID.
+   */
+  async newSession(config: AcpSessionConfig): Promise<AcpSession> {
+    if (!this.connection) {
+      throw new Error('Not connected to ACP agent')
+    }
+
+    try {
+      const response = await this.connection.newSession({
+        cwd: config.cwd,
+        mcpServers: config.mcpServers,
+        env: config.env
+      })
+
+      const acpSessionId = response.sessionId
+      const tangentSessionId = config.sessionId || acpSessionId
+
+      const session: AcpSession = {
+        id: acpSessionId,
+        state: 'connected',
+        config,
+        createdAt: Date.now(),
+        lastActiveAt: Date.now()
+      }
+
+      this.sessions.set(acpSessionId, session)
+      this.tangentToAcpSessionMap.set(tangentSessionId, acpSessionId)
+      this.acpToTangentSessionMap.set(acpSessionId, tangentSessionId)
+
+      this.emit('acp:session-created', session)
+
+      return session
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Failed to create session:', error.message)
+      this.emit('acp:error', error)
+      throw error
+    }
+  }
+
+  /**
+   * Resume an existing ACP session by session ID.
+   * Uses unstable_resumeSession if available, otherwise falls back to loadSession.
+   * Leverages Copilot CLI cloud sync for session state persistence.
+   */
+  async resumeSession(sessionId: string): Promise<AcpSession> {
+    if (!this.connection) {
+      throw new Error('Not connected to ACP agent')
+    }
+
+    try {
+      // Try unstable_resumeSession first (no history replay)
+      if (this.connection.unstable_resumeSession) {
+        const response = await this.connection.unstable_resumeSession({ sessionId })
+        
+        // Check if we already have this session mapped
+        let tangentSessionId = this.acpToTangentSessionMap.get(sessionId)
+        if (!tangentSessionId) {
+          // New session from cloud sync, create mapping
+          tangentSessionId = sessionId
+          this.tangentToAcpSessionMap.set(tangentSessionId, sessionId)
+          this.acpToTangentSessionMap.set(sessionId, tangentSessionId)
+        }
+
+        const session: AcpSession = {
+          id: sessionId,
+          state: 'connected',
+          config: { cwd: '' }, // Will be updated from session updates
+          createdAt: Date.now(),
+          lastActiveAt: Date.now()
+        }
+
+        this.sessions.set(sessionId, session)
+        return session
+      } else if (this.connection.loadSession) {
+        // Fall back to loadSession which replays history
+        const response = await this.connection.loadSession({ sessionId })
+        
+        let tangentSessionId = this.acpToTangentSessionMap.get(sessionId)
+        if (!tangentSessionId) {
+          tangentSessionId = sessionId
+          this.tangentToAcpSessionMap.set(tangentSessionId, sessionId)
+          this.acpToTangentSessionMap.set(sessionId, tangentSessionId)
+        }
+
+        const session: AcpSession = {
+          id: sessionId,
+          state: 'connected',
+          config: { cwd: '' },
+          createdAt: Date.now(),
+          lastActiveAt: Date.now()
+        }
+
+        this.sessions.set(sessionId, session)
+        return session
+      } else {
+        throw new Error('Agent does not support session resumption')
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Failed to resume session:', error.message)
+      this.emit('acp:error', error)
+      throw error
+    }
+  }
+
+  /**
+   * Send a prompt to an ACP session.
+   */
+  async sendPrompt(tangentSessionId: string, text: string): Promise<void> {
+    if (!this.connection) {
+      throw new Error('Not connected to ACP agent')
+    }
+
+    const acpSessionId = this.tangentToAcpSessionMap.get(tangentSessionId)
+    if (!acpSessionId) {
+      throw new Error(`No ACP session mapped to Tangent session ${tangentSessionId}`)
+    }
+
+    try {
+      await this.connection.prompt({
+        sessionId: acpSessionId,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text }]
+          }
+        ]
+      })
+
+      // Update last active time
+      const session = this.sessions.get(acpSessionId)
+      if (session) {
+        session.lastActiveAt = Date.now()
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Failed to send prompt:', error.message)
+      this.emit('acp:error', error)
+      throw error
+    }
+  }
+
+  /**
+   * Close a specific ACP session gracefully.
+   * Removes session from local cache and mapping.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    if (!this.connection) {
+      throw new Error('Not connected to ACP agent')
+    }
+
+    const acpSessionId = this.tangentToAcpSessionMap.get(sessionId) || sessionId
+
+    try {
+      // Close session if agent supports it
+      if (this.connection.unstable_closeSession) {
+        await this.connection.unstable_closeSession({ sessionId: acpSessionId })
+      }
+
+      // Remove from local cache and mappings
+      this.sessions.delete(acpSessionId)
+      const tangentId = this.acpToTangentSessionMap.get(acpSessionId)
+      if (tangentId) {
+        this.tangentToAcpSessionMap.delete(tangentId)
+      }
+      this.acpToTangentSessionMap.delete(acpSessionId)
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Failed to close session:', error.message)
+      this.emit('acp:error', error)
+      throw error
+    }
+  }
+
+  /**
+   * Disconnect from the ACP agent.
+   * Closes all sessions and the connection.
+   */
+  async disconnect(): Promise<void> {
+    if (!this.connection) {
+      return
+    }
+
+    try {
+      // Close all active sessions if agent supports it
+      if (this.connection.unstable_closeSession) {
+        const closePromises = Array.from(this.sessions.keys()).map(async (sessionId) => {
+          try {
+            await this.connection!.unstable_closeSession!({ sessionId })
+          } catch (err) {
+            console.warn(`[Tangent 2] AcpClient: Failed to close session ${sessionId}:`, err)
+          }
+        })
+        await Promise.all(closePromises)
+      }
+
+      // Clear session maps
+      this.sessions.clear()
+      this.tangentToAcpSessionMap.clear()
+      this.acpToTangentSessionMap.clear()
+
+      // The connection will be cleaned up by the closed promise handler
+      this.connection = null
+      this.state = 'disconnected'
+      this.emit('acp:disconnected')
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      console.warn('[Tangent 2] AcpClient: Error during disconnect:', error.message)
+      this.emit('acp:error', error)
+    }
+  }
+
+  /**
+   * Handle permission requests from the agent.
+   * Emits 'acp:permission-request' event and waits for UI response.
+   */
+  private async handlePermissionRequest(
+    params: schema.RequestPermissionRequest
+  ): Promise<schema.RequestPermissionResponse> {
+    const tangentSessionId = this.acpToTangentSessionMap.get(params.sessionId)
+    if (!tangentSessionId) {
+      // Session not found, deny by default
+      return { outcome: 'deny' }
+    }
+
+    const request: AcpPermissionRequest = {
+      id: `perm-${Date.now()}`,
+      sessionId: tangentSessionId,
+      action: params.action || 'unknown',
+      resource: params.resource || 'unknown',
+      toolName: params.toolName,
+      toolArgs: params.args,
+      timestamp: Date.now()
+    }
+
+    // Emit event and wait for response
+    return new Promise<schema.RequestPermissionResponse>((resolve) => {
+      this.pendingPermissionRequests.set(request.id, (response: AcpPermissionResponse) => {
+        this.pendingPermissionRequests.delete(request.id)
+        if (response.approved) {
+          resolve({
+            outcome: response.rememberChoice ? 'allow_always' : 'allow'
+          })
+        } else {
+          resolve({
+            outcome: response.rememberChoice ? 'deny_always' : 'deny'
+          })
+        }
+      })
+
+      this.emit('acp:permission-request', request)
+
+      // Timeout after 60 seconds with deny
+      setTimeout(() => {
+        if (this.pendingPermissionRequests.has(request.id)) {
+          this.pendingPermissionRequests.delete(request.id)
+          resolve({ outcome: 'deny' })
+        }
+      }, 60000)
+    })
+  }
+
+  /**
+   * Respond to a pending permission request.
+   * Called by the UI after user makes a decision.
+   */
+  respondToPermission(response: AcpPermissionResponse): void {
+    const callback = this.pendingPermissionRequests.get(response.requestId)
+    if (callback) {
+      callback(response)
+    }
+  }
+
+  /**
+   * Handle session update notifications from the agent.
+   */
+  private async handleSessionUpdate(notification: schema.SessionNotification): Promise<void> {
+    const tangentSessionId = this.acpToTangentSessionMap.get(notification.sessionId)
+    if (!tangentSessionId) {
+      console.warn('[Tangent 2] AcpClient: Received update for unknown session:', notification.sessionId)
+      return
+    }
+
+    // Convert ACP notification to Tangent response format
+    const response: AcpAgentResponse = {
+      sessionId: tangentSessionId,
+      timestamp: Date.now()
+    }
+
+    // Extract message chunks
+    if (notification.update?.messages) {
+      const textChunks = notification.update.messages
+        .filter((msg: any) => msg.role === 'assistant')
+        .flatMap((msg: any) => msg.content.filter((c: any) => c.type === 'text'))
+        .map((c: any) => c.text)
+
+      if (textChunks.length > 0) {
+        response.text = textChunks.join('')
+      }
+    }
+
+    // Extract tool executions
+    if (notification.update?.toolCalls) {
+      response.toolExecutions = notification.update.toolCalls.map((toolCall: any) => ({
+        id: toolCall.id || `tool-${Date.now()}`,
+        name: toolCall.name || 'unknown',
+        source: 'built-in' as const,
+        status: toolCall.status === 'completed' ? ('success' as const) : ('running' as const),
+        startedAt: Date.now(),
+        args: toolCall.input
+      }))
+    }
+
+    // Map stop reason to status
+    if (notification.update?.stopReason) {
+      switch (notification.update.stopReason) {
+        case 'end_turn':
+        case 'max_tokens':
+          response.status = 'completed'
+          break
+        case 'cancelled':
+        case 'error':
+          response.status = 'error'
+          break
+        default:
+          response.status = 'processing'
+      }
+    }
+
+    // Update session last active time
+    const session = this.sessions.get(notification.sessionId)
+    if (session) {
+      session.lastActiveAt = Date.now()
+
+      // Update metrics if available
+      if (notification.update?.usage) {
+        session.metrics = {
+          inputTokens: notification.update.usage.inputTokens || 0,
+          outputTokens: notification.update.usage.outputTokens || 0,
+          cacheReadTokens: notification.update.usage.cacheReadTokens || 0,
+          cacheWriteTokens: notification.update.usage.cacheWriteTokens || 0,
+          cost: 0, // ACP doesn't provide cost directly
+          totalPremiumRequests: 0
+        }
+      }
+    }
+
+    this.emit('acp:message', response)
+  }
+
+  /**
+   * Get current connection state.
+   */
+  getState(): AcpConnectionState {
+    return this.state
+  }
+
+  /**
+   * Get all active sessions.
+   */
+  getSessions(): AcpSession[] {
+    return Array.from(this.sessions.values())
+  }
+
+  /**
+   * Get a specific session by Tangent session ID.
+   */
+  getSession(tangentSessionId: string): AcpSession | undefined {
+    const acpSessionId = this.tangentToAcpSessionMap.get(tangentSessionId)
+    return acpSessionId ? this.sessions.get(acpSessionId) : undefined
+  }
+}
