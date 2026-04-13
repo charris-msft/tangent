@@ -14,7 +14,7 @@ import { ConfigStore } from './config/ConfigStore'
 import { registerIpcHandlers } from './ipc/handlers'
 import { PipeServer } from './config/PipeServer'
 
-const SESSIONS_PATH = join(homedir(), '.tangent', 'sessions.json')
+const SESSIONS_PATH = join(homedir(), '.tangent-2', 'sessions.json')
 
 let mainWindow: BrowserWindow | null = null
 
@@ -40,7 +40,7 @@ function persistSessions(): void {
     const all = sessionStore.getAll()
     const activeId = sessionManager.getActiveSessionId()
     const restorable = all.filter(s => !s.isExternal && s.status !== 'exited')
-    const dir = join(homedir(), '.tangent')
+    const dir = join(homedir(), '.tangent-2')
     mkdirSync(dir, { recursive: true })
     if (restorable.length > 0) {
       const activeIndex = restorable.findIndex(s => s.id === activeId)
@@ -66,7 +66,7 @@ function persistSessions(): void {
       }
     }
   } catch (err) {
-    console.warn('[Tangent] Failed to persist sessions:', err)
+    console.warn('[Tangent 2] Failed to persist sessions:', err)
   }
 }
 
@@ -104,11 +104,11 @@ sessionStore.on('agent-promoted', ({ id, agentType, ptyId }: { id: string; agent
 })
 
 function createWindow(): void {
-  // Set app identity so Windows taskbar uses the Tangent icon, not the Electron icon
-  app.setAppUserModelId('com.tangent.app')
+  // Set app identity so Windows taskbar uses the Tangent 2 icon, not the Electron icon
+  app.setAppUserModelId('com.tangent2.app')
 
   mainWindow = new BrowserWindow({
-    title: 'Tangent',
+    title: 'Tangent 2',
     width: 1200,
     height: 800,
     minWidth: 600,
@@ -129,11 +129,11 @@ function createWindow(): void {
     const tangentExe = join(__dirname, '../../tangent.exe')
     if (existsSync(tangentExe)) {
       mainWindow.setAppDetails({
-        appId: 'com.tangent.app',
+        appId: 'com.tangent2.app',
         appIconPath: join(__dirname, '../../assets/tangent.ico'),
         appIconIndex: 0,
         relaunchCommand: `"${tangentExe}"`,
-        relaunchDisplayName: 'Tangent'
+        relaunchDisplayName: 'Tangent 2'
       })
     }
   }
@@ -264,7 +264,7 @@ app.whenReady().then(async () => {
             if (resolved) return
             resolved = true
             ptyManager.removeListener('data', onData)
-            console.warn(`[Tangent] Shell ready timeout for session ${sessionId}, replaying anyway`)
+            console.warn(`[Tangent 2] Shell ready timeout for session ${sessionId}, replaying anyway`)
             replayCommand()
           }, SHELL_READY_TIMEOUT_MS)
           ptyManager.on('data', onData)
@@ -274,7 +274,7 @@ app.whenReady().then(async () => {
       }
     }
   } catch (err) {
-    console.warn('[Tangent] Failed to restore sessions:', err)
+    console.warn('[Tangent 2] Failed to restore sessions:', err)
   }
 
   if (!restored) {

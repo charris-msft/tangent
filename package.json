@@ -1,5 +1,5 @@
 {
-  "name": "tangent",
+  "name": "tangent-2",
   "version": "0.1.0",
   "private": true,
   "main": "./out/main/index.js",
@@ -20,8 +20,8 @@
     "postinstall": "electron-rebuild && node scripts/patch-electron-icon.js"
   },
   "build": {
-    "appId": "com.tangent.app",
-    "productName": "Tangent",
+    "appId": "com.tangent2.app",
+    "productName": "Tangent 2",
     "directories": {
       "buildResources": "assets",
       "output": "dist"

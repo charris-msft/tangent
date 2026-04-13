@@ -9,3 +9,94 @@
 ## Learnings
 
 <!-- Append learnings below -->
+
+### 2025-06-01 — Remote Execution Architecture (Plan A)
+
+**Decision: Local-as-Primary Model**
+- Local machine is always source of truth for workspace files
+- Dev Boxes are ephemeral compute — replaceable, no persistent state assumptions
+- Trade-off: Requires bidirectional sync overhead, but gains resilience and failover without data loss
+- Impact: Worst-case failure loses at most one agent turn's workspace changes
+
+**Decision: Copilot CLI Cloud Sync for Session State**
+- Use built-in `sessionSync.level = "account"` instead of custom rsync for `~/.copilot/session-state/`
+- Trade-off: Dependency on GitHub's infrastructure vs. self-managed sync
+- Benefit: Cross-device session resumption, failover to any Dev Box without custom session state migration
+- Tangent auto-configures this during first-time Dev Box provisioning
+
+**Decision: Workspace Sync via Copilot CLI Hooks**
+- `agentStop` hook triggers rsync Dev Box → local after each agent turn
+- Alternative considered: Filesystem watching (rejected — too noisy, mid-turn partial states)
+- Alternative considered: Continuous background sync (rejected — inefficient, conflicts)
+- Trade-off: Sync lag after each turn vs. real-time consistency
+- Benefit: Clean sync points aligned with agent conversation boundaries, minimal conflict surface
+
+**Decision: Remote Execution as Opt-In per Agent Profile**
+- Extended `AgentProfile` interface with optional `remote` object
+- Not a global setting or default behavior
+- Trade-off: Per-agent config complexity vs. user control and gradual adoption
+- Benefit: Users can experiment with one agent profile, keeps local workflow intact
+
+**Decision: ACP over SSH Tunnel (No tmux)**
+- CopilotACP runs as Windows Scheduled Task auto-started on Dev Box login
+- ACP protocol over SSH tunnel provides structured JSON-RPC events
+- tmux rejected because: Windows-only Dev Boxes (would require WSL2), ACP already provides superior structured events, process persistence handled by Scheduled Task
+- Trade-off: SSH tunnel instability vs. WSL2 dependency and filesystem bridging latency
+- Mitigation: Health monitoring, auto-reconnect, exponential backoff
+
+**Decision: First-Time Provisioning with Explicit Consent**
+- Tangent shows consent dialog listing all changes before provisioning Dev Box
+- Changes: OpenSSH service, CopilotACP scheduled task, Copilot CLI session sync config, sync hook scripts
+- Trade-off: Extra user interaction vs. transparency and trust
+- Benefit: Users understand what Tangent does to their Dev Box, no hidden magic
+
+**Session Architecture Patterns**
+- Created `RemoteSession` type extending base `Session` with remote-specific fields
+- RemoteSessionManager orchestrates: Dev Box lifecycle → workspace sync → ACP session creation
+- Status engine explicitly skips remote sessions (no terminal output parsing)
+- Remote session states: `starting-devbox` → `syncing-out` → `tunneling` → `verifying-acp` → `running` → `syncing-back`
+
+**Sync Conflict Handling**
+- Detect local uncommitted changes before applying inbound sync
+- UI presents choices: Keep Local / Use Remote / Merge (opens diff tool)
+- Sync exclusions configurable via glob patterns (stored in `~/.tangent-2/sync-config.json`)
+
+**Failover Strategy**
+- Workspace files: local has latest (synced after last agent turn)
+- Session state: in cloud via Copilot CLI sync
+- Reconnection flow: detect tunnel failure → re-establish tunnel → verify ACP → resume session
+- Dev Box switch flow: disconnect → connect new box → sync workspace out → resume
+- "Continue Locally" escape hatch: sync workspace one final time → create local PTY session with `--resume`
+
+**Dependency Choices**
+- `@microsoft/devbox-mcp` for Dev Box discovery and lifecycle (Microsoft-maintained)
+- `@agentclientprotocol/sdk` for ACP client (Copilot CLI official SDK)
+- `ssh2` for SSH tunnel management (mature, well-tested)
+- `node-rsync` for workspace sync (Node.js wrapper, fallback to robocopy on Windows if needed)
+
+**Testing Strategy**
+- Unit tests for managers (DevBoxManager, SshTunnelManager, RsyncManager, AcpClient)
+- Integration tests for orchestration flows (connection, provisioning, sync, session lifecycle)
+- E2e tests for UI flows (Dev Box assignment, connection, reconnection, failover)
+- Mock DevBox MCP and ACP responses to avoid live cloud dependencies in CI
+
+**Work Breakdown Insights**
+- 58 total work items across 4 phases
+- Critical path: P0.1 → Phase 1 (Dev Box lifecycle) → Phase 2 (ACP) → Phase 3 (sync) → Phase 4 (Tangent integration)
+- Parallel tracks enable: Rusty on backend managers, Linus on SDK/IPC, Livingston on UI, Basher on tests
+- Estimated 9-11 weeks for full implementation with 5-person team
+
+**Risks & Mitigations**
+- SSH tunnel instability → health monitoring + auto-reconnect + connection status UI
+- Workspace sync conflicts → conflict detection UI + merge options + exclusion config
+- Dev Box provisioning failures → consent dialog + retry logic + manual fallback docs
+- rsync not available → check during provisioning + auto-install or document manual install
+- ACP service crashes → Windows Scheduled Task auto-restart + health verification
+
+**Key Files Modified**
+- `src/shared/types.ts` — extended `AgentProfile` with `remote` fields, added `RemoteSession` type
+- `src/main/agents/AgentStore.ts` — schema v3 with remote fields, backward-compatible migration
+- `src/main/agents/AgentLauncher.ts` — route remote-enabled agents to RemoteSessionManager
+- `src/main/session/SessionStore.ts` — track `remoteState` for remote sessions
+- New main process managers: DevBoxManager, SshTunnelManager, RsyncManager, AcpClient, RemoteSessionManager, DevBoxProvisioner
+- New UI components: DevBoxPicker, DevBoxStatus, ProvisioningConsentDialog, ConnectionLostDialog, SyncLogModal
