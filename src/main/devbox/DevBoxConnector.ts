@@ -3,6 +3,7 @@ import type { DevBoxManager } from './DevBoxManager'
 import type { SshTunnelManager } from './SshTunnelManager'
 import type { OpenSshProvisioner } from './OpenSshProvisioner'
 import type { RsyncManager } from './RsyncManager'
+import type { DevTunnelManager } from './DevTunnelManager'
 import type { DevBoxConnectionInfo, DevBoxProvisioningState } from '@shared/devbox-types'
 import { REMOTE_PORTS } from '@shared/constants'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -60,6 +61,7 @@ export class DevBoxConnector extends EventEmitter {
     private devBoxManager: DevBoxManager,
     private sshTunnelManager: SshTunnelManager,
     private openSshProvisioner: OpenSshProvisioner,
+    private devTunnelManager?: DevTunnelManager,
     private rsyncManager?: RsyncManager,
     sshClientFactory?: () => any
   ) {
@@ -125,14 +127,30 @@ export class DevBoxConnector extends EventEmitter {
         )
       }
 
-      console.log(`[Tangent 2] Dev Box ${devBoxName} SSH: ${devBox.connectionInfo.sshHost}:${devBox.connectionInfo.sshPort} as ${devBox.connectionInfo.sshUser}`)
+      console.log(`[Tangent 2] Dev Box ${devBoxName} tunnel: ${devBox.connectionInfo.tunnelId ?? devBox.connectionInfo.sshHost} as ${devBox.connectionInfo.sshUser}`)
 
-      // Step 2: Ensure OpenSSH is provisioned on the Dev Box
+      // Step 2: Connect via devtunnel CLI (maps remote SSH port to localhost)
       this._updateState(connection, 'ensuring-ssh')
       this.emit('connection:provisioning', connectionId)
 
+      let sshHost = devBox.connectionInfo.sshHost
+      let sshPort = devBox.connectionInfo.sshPort
+
+      // If we have a DevTunnelManager and a tunnel ID, use `devtunnel connect`
+      // to get authenticated access through the tunnel
+      if (this.devTunnelManager && devBox.connectionInfo.tunnelId) {
+        console.log(`[Tangent 2] Using devtunnel connect for ${devBox.connectionInfo.tunnelId}...`)
+        const localSshPort = await this.devTunnelManager.connect(devBox.connectionInfo.tunnelId)
+        sshHost = '127.0.0.1'
+        sshPort = localSshPort
+        console.log(`[Tangent 2] DevTunnel mapped SSH to localhost:${localSshPort}`)
+      }
+
+      // Create a modified connection info pointing to the local tunnel port
+      const tunnelConnInfo = { ...devBox.connectionInfo, sshHost, sshPort }
+
       const sshKeyPath = sshConfig?.keyPath ?? devBox.connectionInfo.sshKeyPath
-      const sshClient = await this._createSshClient(devBox.connectionInfo, sshKeyPath)
+      const sshClient = await this._createSshClient(tunnelConnInfo, sshKeyPath)
       const sshReady = await this.openSshProvisioner.ensureOpenSsh(sshClient)
       sshClient.end()
 
@@ -140,26 +158,25 @@ export class DevBoxConnector extends EventEmitter {
         throw new Error('Failed to provision OpenSSH on Dev Box')
       }
 
-      // Step 3: Establish SSH tunnel (for ACP port forwarding)
-      // Forward local ACP_LOCAL port to remote ACP_REMOTE port over SSH
+      // Step 3: Establish SSH tunnel (for ACP port forwarding over the devtunnel)
       this._updateState(connection, 'tunneling')
       this.emit('connection:tunneling', connectionId)
 
-      const localPort = sshConfig?.localPort || REMOTE_PORTS.ACP_LOCAL
-      const remotePort = sshConfig?.remotePort || devBox.connectionInfo.acpPort || REMOTE_PORTS.ACP_REMOTE
-      const tunnelId = this.sshTunnelManager.createTunnel(
-        devBox.connectionInfo,
-        localPort,
-        remotePort,
+      const acpLocalPort = sshConfig?.localPort || REMOTE_PORTS.ACP_LOCAL
+      const acpRemotePort = sshConfig?.remotePort || devBox.connectionInfo.acpPort || REMOTE_PORTS.ACP_REMOTE
+      const sshTunnelId = this.sshTunnelManager.createTunnel(
+        tunnelConnInfo,
+        acpLocalPort,
+        acpRemotePort,
         sshKeyPath
       )
-      connection.tunnelId = tunnelId
-      connection.connectionInfo = devBox.connectionInfo
+      connection.tunnelId = sshTunnelId
+      connection.connectionInfo = tunnelConnInfo
 
       // Step 4: Verify tunnel health
       this._updateState(connection, 'verifying')
 
-      await this._waitForTunnelReady(tunnelId, 5000) // 5s timeout
+      await this._waitForTunnelReady(sshTunnelId, 5000) // 5s timeout
 
       // Step 5: Ready!
       this._updateState(connection, 'ready')

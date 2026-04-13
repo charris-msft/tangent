@@ -145,6 +145,7 @@ describe('DevBox Lifecycle Integration', () => {
       devBoxManager as any,
       sshTunnelManager as any,
       openSshProvisioner as any,
+      undefined, // devTunnelManager
       rsyncManager as any,
       sshClientFactory as any
     )

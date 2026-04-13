@@ -16,6 +16,7 @@ const CONFIG_PATH = join(homedir(), '.tangent', 'devbox-config.json')
 
 interface DevBoxTunnelConfig {
   tunnelHost: string
+  tunnelId?: string
   sshUser: string
   sshPort?: number
   sshKeyPath?: string
@@ -287,6 +288,14 @@ export class DevBoxManager extends EventEmitter {
       // Look up per-devbox tunnel config
       const tunnelCfg = this.getTunnelConfig(devBoxName)
 
+      // Extract tunnel ID from the tunnel host URL if not explicitly set
+      // e.g. "mbhj7258-22.usw2.devtunnels.ms" → tunnel ID is "mbhj7258"
+      let tunnelId = tunnelCfg?.tunnelId
+      if (!tunnelId && tunnelCfg?.tunnelHost) {
+        const match = tunnelCfg.tunnelHost.match(/^([a-z0-9-]+?)(?:-\d+)?\./)
+        if (match) tunnelId = match[1]
+      }
+
       return {
         webUrl: data.webUrl ?? undefined,
         rdpConnectionUrl: data.rdpConnectionUrl ?? undefined,
@@ -295,6 +304,7 @@ export class DevBoxManager extends EventEmitter {
         sshUser: tunnelCfg?.sshUser ?? 'azureuser',
         sshKeyPath: tunnelCfg?.sshKeyPath,
         sshConfigured: !!tunnelCfg?.tunnelHost,
+        tunnelId,
         acpPort: 3000
       }
     } catch (error) {

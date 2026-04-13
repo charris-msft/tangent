@@ -94,6 +94,7 @@ describe('DevBoxConnector', () => {
       devBoxManager as any,
       sshTunnelManager as any,
       openSshProvisioner as any,
+      undefined, // devTunnelManager — not used in unit tests
       rsyncManager as any,
       sshClientFactory as any
     )
@@ -694,7 +695,8 @@ describe('DevBoxConnector', () => {
         devBoxManager as any,
         sshTunnelManager as any,
         openSshProvisioner as any,
-        undefined,
+        undefined, // devTunnelManager
+        undefined, // rsyncManager
         () => {
           const client = new MockSshClient()
           mockSshClients.push(client)

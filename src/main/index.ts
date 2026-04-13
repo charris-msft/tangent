@@ -15,6 +15,7 @@ import { registerIpcHandlers } from './ipc/handlers'
 import { PipeServer } from './config/PipeServer'
 import { DevBoxManager } from './devbox/DevBoxManager'
 import { SshTunnelManager } from './devbox/SshTunnelManager'
+import { DevTunnelManager } from './devbox/DevTunnelManager'
 import { OpenSshProvisioner } from './devbox/OpenSshProvisioner'
 import { AcpProvisioner } from './devbox/AcpProvisioner'
 import { DevBoxConnector } from './devbox/DevBoxConnector'
@@ -46,9 +47,10 @@ const pipeServer = new PipeServer(
 // Remote execution managers
 const devBoxManager = new DevBoxManager()
 const sshTunnelManager = new SshTunnelManager()
+const devTunnelManager = new DevTunnelManager()
 const openSshProvisioner = new OpenSshProvisioner()
 const acpProvisioner = new AcpProvisioner()
-const devBoxConnector = new DevBoxConnector(devBoxManager, sshTunnelManager, openSshProvisioner)
+const devBoxConnector = new DevBoxConnector(devBoxManager, sshTunnelManager, openSshProvisioner, devTunnelManager)
 const devBoxProvisioner = new DevBoxProvisioner(openSshProvisioner, acpProvisioner)
 const acpClient = new AcpClient()
 const rsyncManager = new RsyncManager()

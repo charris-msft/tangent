@@ -12,9 +12,9 @@
     4. Creates a scheduled task to auto-host the tunnel on logon
     5. Outputs the tunnel URL for your Tangent config
 
-    The tunnel uses authenticated access — connecting clients must authenticate
-    with the same Microsoft Entra ID or GitHub identity used to create the tunnel.
-    This is the recommended approach for enterprise environments.
+    The tunnel uses GitHub-authenticated access — connecting clients must be
+    logged into devtunnel with the same GitHub account. Since Tangent is for
+    Copilot users, everyone already has a GitHub account.
 
 .NOTES
     After running, add the tunnel host to ~/.tangent/devbox-config.json on your
@@ -217,29 +217,36 @@ $sw.Stop()
 Write-Elapsed $sw
 
 # ---------------------------------------------------------------------------
-# Step 3: devtunnel login
+# Step 3: devtunnel login (GitHub — required for cross-machine auth)
 # ---------------------------------------------------------------------------
-Write-Step "Authenticating devtunnel"
+Write-Step "Authenticating devtunnel (GitHub)"
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 Write-Detail "Checking devtunnel login status..."
 $loginCheck = & devtunnel user show 2>&1
-if ($LASTEXITCODE -ne 0 -or $loginCheck -match 'not logged in' -or $loginCheck -match 'login') {
-    Write-Detail "Not logged in — opening browser for authentication..."
-    Write-Warn "A browser window will open. Sign in with your Microsoft or GitHub account."
+$isGitHub = $loginCheck -match 'GitHub'
+
+if ($LASTEXITCODE -ne 0 -or $loginCheck -match 'not logged in' -or -not $isGitHub) {
+    if ($loginCheck -match 'logged in' -and -not $isGitHub) {
+        Write-Warn "Currently logged in with a non-GitHub identity. Switching to GitHub..."
+        Write-Detail "Tangent requires GitHub auth so the tunnel works from your local machine too."
+        & devtunnel user logout 2>&1 | Out-Null
+    }
+    Write-Detail "Logging in with GitHub (required for Copilot users)..."
+    Write-Warn "A browser window will open. Sign in with your GitHub account."
     Write-Host ""
-    & devtunnel user login
+    & devtunnel user login -g
     Write-Host ""
     if ($LASTEXITCODE -eq 0) {
-        Write-Success "devtunnel login complete"
+        Write-Success "devtunnel GitHub login complete"
     } else {
-        Write-Fail "devtunnel login failed — you may need to run 'devtunnel user login' manually"
+        Write-Fail "devtunnel login failed — run 'devtunnel user login -g' manually"
     }
 } else {
     Write-Detail "Login info:"
     $loginCheck | ForEach-Object { Write-Detail "  $_" }
-    Write-Success "devtunnel already authenticated"
+    Write-Success "devtunnel already authenticated with GitHub"
 }
 
 $sw.Stop()
