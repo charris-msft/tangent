@@ -337,6 +337,10 @@ export class DevBoxManager extends EventEmitter {
       const currentBox = await this.getDevBox(projectName, devBoxName)
       if (currentBox && currentBox.state === 'Running') {
         console.log(`[Tangent] Dev Box ${devBoxName} already running`)
+        const connInfo = await this.getConnectionInfo(projectName, devBoxName)
+        if (connInfo) {
+          currentBox.connectionInfo = connInfo
+        }
         return currentBox
       }
 
@@ -356,6 +360,11 @@ export class DevBoxManager extends EventEmitter {
         if (state === 'Running') {
           console.log(`[Tangent] Dev Box ${devBoxName} reached Running state after ${elapsed}ms`)
           if (!devBox) throw new Error('Dev Box is running but resource data unavailable')
+          // Fetch connection info (webUrl, rdpConnectionUrl)
+          const connInfo = await this.getConnectionInfo(projectName, devBoxName)
+          if (connInfo) {
+            devBox.connectionInfo = connInfo
+          }
           return devBox
         }
 

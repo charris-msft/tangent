@@ -102,7 +102,24 @@ export class DevBoxConnector extends EventEmitter {
       )
 
       if (!devBox.connectionInfo) {
-        throw new Error('Dev Box started but connection info unavailable')
+        throw new Error('Dev Box started but connection info unavailable. Check your devbox-config.json.')
+      }
+
+      connection.connectionInfo = devBox.connectionInfo
+      console.log(`[Tangent 2] Dev Box ${devBoxName} connection info: webUrl=${devBox.connectionInfo.sshHost}`)
+
+      // Check if we have a usable SSH endpoint
+      // Dev Boxes expose RDP via Azure Virtual Desktop, not SSH directly.
+      // The sshHost field contains the webUrl — SSH requires the user to set up
+      // the Dev Box for SSH access (OpenSSH + network access via dev tunnel or VPN).
+      if (!devBox.connectionInfo.ipAddress || devBox.connectionInfo.ipAddress.startsWith('http')) {
+        throw new Error(
+          'Dev Box is running but no SSH endpoint available. ' +
+          'Dev Boxes use RDP by default. To enable SSH: ' +
+          '1) RDP into the Dev Box, 2) Enable OpenSSH server, ' +
+          '3) Set up a dev tunnel (devtunnel host -p 22) or configure VPN access, ' +
+          '4) Add the SSH host/IP to your agent profile remote config.'
+        )
       }
 
       // Step 2: Ensure OpenSSH is provisioned
