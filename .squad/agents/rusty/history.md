@@ -289,3 +289,134 @@ Created `src/main/devbox/AcpClient.ts` — wraps `@agentclientprotocol/sdk` with
 - Cloud sync enables seamless Dev Box failover (resume session on new box)
 
 <!-- Append learnings below -->
+
+### 2026-04-13: P1.11 — DevBoxConnector Orchestrator Implementation
+
+**What:** Created `src/main/devbox/DevBoxConnector.ts` — the critical integration piece that orchestrates the full Dev Box connection flow from start to ready.
+
+**Core Features:**
+- `connect(devBoxName, projectName, sshConfig)` — orchestrates full connection sequence:
+  1. Auto-start Dev Box (via DevBoxManager.autoStart) → wait for Running state
+  2. Ensure OpenSSH is provisioned (via OpenSshProvisioner.ensureOpenSsh)
+  3. Establish SSH tunnel (via SshTunnelManager.createTunnel)
+  4. Verify tunnel health (poll until connected, 5s timeout)
+  5. Return unique connection ID
+- `disconnect(connectionId)` — gracefully closes tunnel, removes connection from tracking
+- `getStatus(connectionId)` — returns current ConnectionHandle (state, timestamps, tunnel ID, error)
+- EventEmitter for state changes: `connection:starting`, `connection:provisioning`, `connection:tunneling`, `connection:ready`, `connection:failed`, `connection:disconnected`
+
+**Connection State Machine:**
+```
+idle → starting-devbox → ensuring-ssh → tunneling → verifying → ready
+                                                                  ↓
+                                                              disconnected
+Any state → failed (with error tracking)
+```
+
+**Technical Implementation:**
+- Extends EventEmitter for reactive state tracking
+- Connection handles tracked in Map with unique IDs (`conn-{timestamp}-{random}`)
+- SSH client factory injected via constructor (4th parameter, optional) — enables full mocking in tests
+- Tunnel verification uses 100ms polling interval with 5s timeout (fast for tests, reasonable for production)
+- SSH client creation wrapped in Promise, auto-emits 'ready' event on successful connection
+- Full error handling — catches at each orchestration step, emits 'connection:failed', stores error in connection handle
+
+**Test Coverage:**
+- 14 unit tests, all passing ✅
+- Happy path: full connection flow from start to ready
+- Failure scenarios:
+  - Dev Box won't start (autoStart fails)
+  - Dev Box has no connection info
+  - OpenSSH provisioning fails
+  - Tunnel creation times out (5s)
+  - Tunnel enters error state
+  - Custom SSH config (ports)
+  - Disconnect gracefully
+  - Get status with tunnel error detection
+  - State transitions (idle → failed on errors)
+- Mock dependencies: DevBoxManager, SshTunnelManager, OpenSshProvisioner, SSH Client (factory injection)
+
+**Design Patterns:**
+- Dependency injection via constructor (all 3 managers + optional SSH client factory)
+- EventEmitter for async state updates
+- console.warn with `[Tangent 2]` prefix for errors
+- async/await throughout
+- Named exports only
+- Connection lifecycle tracking (startedAt, readyAt timestamps)
+- Silent cleanup failures pattern — no exceptions thrown during disconnect
+
+**Integration Points:**
+- Ready for P1.12 IPC handlers to call `connect()` from renderer
+- Coordinates DevBoxManager, SshTunnelManager, OpenSshProvisioner into single API
+- Connection IDs can be stored in SessionStore for session-to-devbox mapping
+- Status polling available for UI progress updates
+
+**Status:** ✅ Complete
+- Full orchestration logic implemented
+- Comprehensive test coverage (14/14 passing)
+- Critical path blocker removed — P1.12 can now proceed
+
+### 2026-04-13: P3.2 — RsyncManager Implementation
+
+**What:** Created `src/main/devbox/RsyncManager.ts` for bidirectional workspace sync between local machine and Dev Box.
+
+**Core Features:**
+- `syncOutbound(localPath, remotePath, sshHost, sshUser)` — local → Dev Box sync
+- `syncInbound(remotePath, localPath, sshHost, sshUser)` — Dev Box → local sync
+- EventEmitter pattern with events: `sync:started`, `sync:progress`, `sync:complete`, `sync:error`
+- Configurable exclude patterns loaded from `~/.tangent-2/sync-config.json`
+- Default exclusions: `node_modules`, `.git`, `.env`, `*.log`, `.DS_Store`, `Thumbs.db`
+- Progress tracking via rsync output parsing (bytes transferred, files synced, current file)
+- Concurrent sync prevention per path + direction
+
+**Technical Implementation:**
+- Uses `node-rsync` package (wrapper around rsync CLI)
+- Rsync flags: `-avz` (archive, verbose, compress)
+- Rsync options: `--delete` (mirror sync), `--exclude` (patterns), `-e "ssh -o StrictHostKeyChecking=no"` (SSH transport)
+- Remote paths formatted as `user@host:path` for SSH transport
+- Output parsing extracts file count and bytes from rsync verbose output
+- Active sync tracking via `Set<string>` with keys like `"outbound:/path"` or `"inbound:/path"`
+
+**Config File Format:**
+```json
+{
+  "version": 1,
+  "excludePatterns": ["*.tmp", "temp/", "dist/"]
+}
+```
+- Merged with defaults (defaults always included)
+- Graceful fallback if config missing or malformed
+- Version check enforces schema compatibility
+
+**Design Patterns:**
+- Extends EventEmitter for state changes
+- async/await throughout
+- Returns `RsyncResult` with success boolean, bytes, files, optional error
+- Silent failures with console.warn logging (`[Tangent 2]` prefix)
+- No exceptions thrown — returns error in result object
+- Named exports only
+
+**Test Coverage:**
+- 15 passing unit tests (4 skipped fs mocking tests due to ESM limitations)
+- Tests cover success paths, error handling, event emissions, progress parsing
+- Concurrent sync prevention validated
+- Default exclude patterns validated
+- Mocked `node-rsync.execute` for unit testing
+
+**Integration Points:**
+- Ready for DevBoxManager to call during connect (outbound) and after agent turn (inbound)
+- Consumes `DevBoxSyncConfig` from `@shared/devbox-types`
+- Events can be forwarded to renderer for progress UI
+
+**Notable Decisions:**
+- Local-as-primary model — local workspace is source of truth (matches architectural decision)
+- Sync direction encoded in event payloads (`direction: 'outbound' | 'inbound'`)
+- Progress events emitted per file (enables real-time UI updates)
+- Exclude patterns configurable but defaults always included (safety)
+- No fallback to robocopy on Windows (rsync must be available — requirement for Dev Box sync)
+- fs mocking tests skipped in ESM mode (manual testing recommended for config loading)
+
+**Next Steps:**
+- P4: Integrate with DevBoxManager for auto-sync on connect and after agent turns
+- P4: Wire IPC handlers for progress events to renderer
+- P4: Create UI components for sync status display
