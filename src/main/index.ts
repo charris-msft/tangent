@@ -24,7 +24,7 @@ import { RsyncManager } from './devbox/RsyncManager'
 import { SyncListener } from './devbox/SyncListener'
 import { RemoteSessionManager } from './session/RemoteSessionManager'
 
-const SESSIONS_PATH = join(homedir(), '.tangent-2', 'sessions.json')
+const SESSIONS_PATH = join(homedir(), '.tangent', 'sessions.json')
 
 let mainWindow: BrowserWindow | null = null
 
@@ -64,7 +64,7 @@ function persistSessions(): void {
     const all = sessionStore.getAll()
     const activeId = sessionManager.getActiveSessionId()
     const restorable = all.filter(s => !s.isExternal && s.status !== 'exited')
-    const dir = join(homedir(), '.tangent-2')
+    const dir = join(homedir(), '.tangent')
     mkdirSync(dir, { recursive: true })
     if (restorable.length > 0) {
       const activeIndex = restorable.findIndex(s => s.id === activeId)

@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { v4 as uuid } from 'uuid'
 import type { ProjectFolder, AgentStoreData } from '@shared/types'
 
-const STORE_DIR = join(homedir(), '.tangent-2')
+const STORE_DIR = join(homedir(), '.tangent')
 const STORE_PATH = join(STORE_DIR, 'agents.json')
 
 function defaultGroups(): ProjectFolder[] {

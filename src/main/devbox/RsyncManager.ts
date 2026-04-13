@@ -9,7 +9,7 @@ import * as nodeRsync from 'node-rsync'
 // === Constants ===
 
 const DEFAULT_EXCLUDES = ['node_modules', '.git', '.env', '*.log', '.DS_Store', 'Thumbs.db']
-const CONFIG_PATH = path.join(os.homedir(), '.tangent-2', 'sync-config.json')
+const CONFIG_PATH = path.join(os.homedir(), '.tangent', 'sync-config.json')
 
 // === Types ===
 

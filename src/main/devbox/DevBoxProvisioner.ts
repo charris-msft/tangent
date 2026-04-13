@@ -44,7 +44,7 @@ export class DevBoxProvisioner extends EventEmitter {
     acpProvisioner?: AcpProvisioner
   ) {
     super()
-    this.stateFilePath = join(homedir(), '.tangent-2', 'devbox-state.json')
+    this.stateFilePath = join(homedir(), '.tangent', 'devbox-state.json')
     this.openSshProvisioner = openSshProvisioner || new OpenSshProvisioner()
     this.acpProvisioner = acpProvisioner || new AcpProvisioner()
   }
@@ -124,7 +124,7 @@ export class DevBoxProvisioner extends EventEmitter {
   }
 
   private async saveState(state: DevBoxProvisioningState): Promise<void> {
-    const dir = join(homedir(), '.tangent-2')
+    const dir = join(homedir(), '.tangent')
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(this.stateFilePath, JSON.stringify(state, null, 2), 'utf-8')
   }

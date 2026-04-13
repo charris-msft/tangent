@@ -121,7 +121,7 @@ class MockSessionManager {
 describe('Remote Session Restore', () => {
   let sessionStore: MockSessionStore
   let sessionManager: MockSessionManager
-  const SESSIONS_PATH = '/home/user/.tangent-2/sessions.json'
+  const SESSIONS_PATH = '/home/user/.tangent/sessions.json'
 
   beforeEach(() => {
     sessionStore = new MockSessionStore()

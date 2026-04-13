@@ -14,7 +14,7 @@ describe('DevBoxProvisioner', () => {
   let mockOpenSshProvisioner: any
   let mockAcpProvisioner: any
   const testDevBoxName = 'test-devbox-1'
-  const stateFilePath = join(homedir(), '.tangent-2', 'devbox-state.json')
+  const stateFilePath = join(homedir(), '.tangent', 'devbox-state.json')
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -111,7 +111,7 @@ describe('DevBoxProvisioner', () => {
       const changes = ['OpenSSH configured', 'ACP service running']
       await provisioner.markProvisioned(testDevBoxName, changes)
 
-      expect(fs.mkdir).toHaveBeenCalledWith(join(homedir(), '.tangent-2'), { recursive: true })
+      expect(fs.mkdir).toHaveBeenCalledWith(join(homedir(), '.tangent'), { recursive: true })
       expect(fs.writeFile).toHaveBeenCalledWith(
         stateFilePath,
         expect.stringContaining(testDevBoxName),
