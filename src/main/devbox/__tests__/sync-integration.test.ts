@@ -7,116 +7,117 @@ import { SyncListener } from '../SyncListener'
 // Mock Dependencies
 // ============================================================================
 
-// Create a mock RsyncManager class that extends EventEmitter
-// This must be defined before vi.mock() due to hoisting
-class MockRsyncManagerClass extends EventEmitter {
-  private activeSyncs = new Set<string>()
+// Mock the RsyncManager module with a factory function
+vi.mock('../RsyncManager', () => {
+  const { EventEmitter } = require('events')
   
-  async syncOutbound(
-    localPath: string,
-    remotePath: string,
-    sshHost: string,
-    sshUser: string
-  ): Promise<RsyncResult> {
-    const syncId = `outbound:${localPath}`
-    if (this.activeSyncs.has(syncId)) {
-      return { success: false, bytesTransferred: 0, filesSynced: 0, error: 'Sync in progress' }
-    }
+  return {
+    RsyncManager: class extends EventEmitter {
+      private activeSyncs = new Set<string>()
+      
+      async syncOutbound(
+        localPath: string,
+        remotePath: string,
+        sshHost: string,
+        sshUser: string
+      ): Promise<any> {
+        const syncId = `outbound:${localPath}`
+        if (this.activeSyncs.has(syncId)) {
+          return { success: false, bytesTransferred: 0, filesSynced: 0, error: 'Sync in progress' }
+        }
 
-    this.activeSyncs.add(syncId)
-    this.emit('sync:started', { direction: 'outbound', localPath, remotePath })
+        this.activeSyncs.add(syncId)
+        this.emit('sync:started', { direction: 'outbound', localPath, remotePath })
 
-    // Simulate async operation
-    await new Promise(resolve => setTimeout(resolve, 10))
+        // Simulate async operation
+        await new Promise(resolve => setTimeout(resolve, 10))
 
-    const result = { success: true, bytesTransferred: 12345, filesSynced: 3 }
-    this.emit('sync:complete', { direction: 'outbound', result })
-    this.activeSyncs.delete(syncId)
-    
-    return result
+        const result = { success: true, bytesTransferred: 12345, filesSynced: 3 }
+        this.emit('sync:complete', { direction: 'outbound', result })
+        this.activeSyncs.delete(syncId)
+        
+        return result
+      }
+
+      async syncInbound(
+        remotePath: string,
+        localPath: string,
+        sshHost: string,
+        sshUser: string
+      ): Promise<any> {
+        this.emit('sync:started', { direction: 'inbound', localPath, remotePath })
+        await new Promise(resolve => setTimeout(resolve, 10))
+        const result = { success: true, bytesTransferred: 234, filesSynced: 2 }
+        this.emit('sync:complete', { direction: 'inbound', result })
+        return result
+      }
+
+      async syncInboundWithConflictCheck(
+        remotePath: string,
+        localPath: string,
+        sshHost: string,
+        sshUser: string
+      ): Promise<any> {
+        this.emit('sync:started', { direction: 'inbound', localPath, remotePath })
+        
+        // Simulate conflict detection
+        const conflicts = [
+          { path: 'file.ts', hasUncommittedChanges: true }
+        ]
+        
+        if (conflicts.length > 0) {
+          this.emit('sync:conflict', { files: conflicts, localPath, remotePath })
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 50))
+        const result = { success: true, bytesTransferred: 100, filesSynced: 1 }
+        this.emit('sync:complete', { direction: 'inbound', result })
+        return result
+      }
+
+      async detectConflicts(
+        localPath: string,
+        remotePath: string,
+        sshHost: string,
+        sshUser: string
+      ): Promise<any[]> {
+        return [{ path: 'src/modified.ts', hasUncommittedChanges: true }]
+      }
+
+      getExcludePatterns(): string[] {
+        return ['node_modules', '.git', '.env', '*.log', '.DS_Store', 'Thumbs.db']
+      }
+
+      setConflictResolution(syncId: string, resolution: string): void {
+        // Mock implementation
+      }
+
+      isSyncActive(localPath: string, direction: string): boolean {
+        return this.activeSyncs.has(`${direction}:${localPath}`)
+      }
+    },
+    ConflictingFile: {} as any,
+    RsyncResult: {} as any,
+    SyncConflictEvent: {} as any
   }
-
-  async syncInbound(
-    remotePath: string,
-    localPath: string,
-    sshHost: string,
-    sshUser: string
-  ): Promise<RsyncResult> {
-    this.emit('sync:started', { direction: 'inbound', localPath, remotePath })
-    await new Promise(resolve => setTimeout(resolve, 10))
-    const result = { success: true, bytesTransferred: 234, filesSynced: 2 }
-    this.emit('sync:complete', { direction: 'inbound', result })
-    return result
-  }
-
-  async syncInboundWithConflictCheck(
-    remotePath: string,
-    localPath: string,
-    sshHost: string,
-    sshUser: string
-  ): Promise<RsyncResult> {
-    this.emit('sync:started', { direction: 'inbound', localPath, remotePath })
-    
-    // Simulate conflict detection
-    const conflicts: ConflictingFile[] = [
-      { path: 'file.ts', hasUncommittedChanges: true }
-    ]
-    
-    if (conflicts.length > 0) {
-      this.emit('sync:conflict', { files: conflicts, localPath, remotePath })
-    }
-    
-    await new Promise(resolve => setTimeout(resolve, 50))
-    const result = { success: true, bytesTransferred: 100, filesSynced: 1 }
-    this.emit('sync:complete', { direction: 'inbound', result })
-    return result
-  }
-
-  async detectConflicts(
-    localPath: string,
-    remotePath: string,
-    sshHost: string,
-    sshUser: string
-  ): Promise<ConflictingFile[]> {
-    return [{ path: 'src/modified.ts', hasUncommittedChanges: true }]
-  }
-
-  getExcludePatterns(): string[] {
-    return ['node_modules', '.git', '.env', '*.log', '.DS_Store', 'Thumbs.db']
-  }
-
-  setConflictResolution(syncId: string, resolution: 'keep-local' | 'use-remote' | 'merge'): void {
-    // Mock implementation
-  }
-
-  isSyncActive(localPath: string, direction: 'outbound' | 'inbound'): boolean {
-    return this.activeSyncs.has(`${direction}:${localPath}`)
-  }
-}
-
-// Mock the RsyncManager module
-vi.mock('../RsyncManager', () => ({
-  RsyncManager: MockRsyncManagerClass,
-  ConflictingFile: {} as any,
-  RsyncResult: {} as any,
-  SyncConflictEvent: {} as any
-}))
+})
 
 // ============================================================================
 // Integration Tests — Bidirectional Sync
 // ============================================================================
 
 describe('Bidirectional Sync Integration', () => {
-  let rsyncManager: MockRsyncManagerClass
+  let rsyncManager: any
   let syncListener: SyncListener
   const testLocalPath = '/home/user/workspace'
   const testRemotePath = '/home/devbox/workspace'
   const testSshHost = '10.0.0.1'
   const testSshUser = 'azureuser'
 
-  beforeEach(() => {
-    rsyncManager = new MockRsyncManagerClass()
-    syncListener = new SyncListener(rsyncManager as any)
+  beforeEach(async () => {
+    const { RsyncManager } = await import('../RsyncManager')
+    rsyncManager = new RsyncManager()
+    syncListener = new SyncListener(rsyncManager)
     vi.clearAllMocks()
   })
 
