@@ -2,7 +2,7 @@ import { EventEmitter } from 'events'
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import { DefaultAzureCredential } from '@azure/identity'
+import { DefaultAzureCredential, AzureCliCredential } from '@azure/identity'
 import type {
   DevBoxResource,
   DevBoxProvisioningState,
@@ -75,8 +75,8 @@ export class DevBoxManager extends EventEmitter {
         devCenterEndpoint: parsed.devCenterEndpoint.replace(/\/+$/, ''),
         projectName: parsed.projectName
       }
-      this.credential = new DefaultAzureCredential()
-      console.log(`[Tangent] DevBox configured: ${this.config.devCenterEndpoint} / ${this.config.projectName}`)
+      this.credential = new AzureCliCredential()
+      console.log(`[Tangent] DevBox configured: ${this.config.devCenterEndpoint} / ${this.config.projectName} (using AzureCliCredential)`)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.configError = `Failed to load config: ${message}`

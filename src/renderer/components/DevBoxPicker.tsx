@@ -117,15 +117,13 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
               </code>{' '}
               with your Dev Center endpoint and project name.
             </p>
-            <a
-              href="https://portal.azure.com/#view/Microsoft_Azure_DevCenter/DevBoxesMenuBlade/~/devBoxes"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => window.tangentAPI?.shell?.openExternal?.('https://portal.azure.com/#view/Microsoft_Azure_DevCenter/DevBoxesMenuBlade/~/devBoxes')}
               className="text-xs underline"
-              style={{ color: 'var(--accent)' }}
+              style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               Open Azure Portal to find your Dev Center
-            </a>
+            </button>
           </div>
         )}
 
