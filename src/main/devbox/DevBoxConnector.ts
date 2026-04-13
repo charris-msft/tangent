@@ -2,6 +2,7 @@ import { EventEmitter } from 'events'
 import type { DevBoxManager } from './DevBoxManager'
 import type { SshTunnelManager } from './SshTunnelManager'
 import type { OpenSshProvisioner } from './OpenSshProvisioner'
+import type { RsyncManager } from './RsyncManager'
 import type { DevBoxConnectionInfo, DevBoxProvisioningState } from '@shared/devbox-types'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - ssh2 has no type definitions
@@ -23,6 +24,7 @@ interface ConnectionHandle {
   projectName: string
   state: ConnectionState
   tunnelId?: string
+  connectionInfo?: DevBoxConnectionInfo
   error?: string
   startedAt: number
   readyAt?: number
@@ -32,6 +34,7 @@ export interface DevBoxConnectorEvents {
   'connection:starting': (connectionId: string) => void
   'connection:provisioning': (connectionId: string) => void
   'connection:tunneling': (connectionId: string) => void
+  'connection:syncing': (connectionId: string) => void
   'connection:ready': (connectionId: string) => void
   'connection:failed': (connectionId: string, error: string) => void
   'connection:disconnected': (connectionId: string) => void
@@ -56,6 +59,7 @@ export class DevBoxConnector extends EventEmitter {
     private devBoxManager: DevBoxManager,
     private sshTunnelManager: SshTunnelManager,
     private openSshProvisioner: OpenSshProvisioner,
+    private rsyncManager?: RsyncManager,
     sshClientFactory?: () => any
   ) {
     super()
@@ -126,6 +130,7 @@ export class DevBoxConnector extends EventEmitter {
         sshConfig?.keyPath
       )
       connection.tunnelId = tunnelId
+      connection.connectionInfo = devBox.connectionInfo
 
       // Step 4: Verify tunnel health
       this._updateState(connection, 'verifying')
@@ -147,7 +152,7 @@ export class DevBoxConnector extends EventEmitter {
     }
   }
 
-  async disconnect(connectionId: string): Promise<void> {
+  async disconnect(connectionId: string, options?: { stopDevBox?: boolean }): Promise<void> {
     const connection = this.connections.get(connectionId)
     if (!connection) {
       console.warn(`[Tangent 2] Connection ${connectionId} not found`)
@@ -155,8 +160,20 @@ export class DevBoxConnector extends EventEmitter {
     }
 
     try {
+      // Close SSH tunnel
       if (connection.tunnelId) {
         this.sshTunnelManager.closeTunnel(connection.tunnelId)
+      }
+
+      // Optionally stop Dev Box
+      if (options?.stopDevBox) {
+        try {
+          await this.devBoxManager.stopDevBox(connection.projectName, connection.devBoxName)
+          console.log(`[Tangent 2] Dev Box ${connection.devBoxName} stopped`)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          console.warn(`[Tangent 2] Failed to stop Dev Box:`, message)
+        }
       }
 
       this._updateState(connection, 'disconnected')
@@ -166,6 +183,50 @@ export class DevBoxConnector extends EventEmitter {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Tangent 2] Error during disconnect:`, message)
       this._updateState(connection, 'failed', message)
+    }
+  }
+
+  async syncWorkspaceOut(
+    connectionId: string,
+    localPath: string,
+    remoteBasePath: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const connection = this.connections.get(connectionId)
+    if (!connection) {
+      return { success: false, error: `Connection ${connectionId} not found` }
+    }
+
+    if (!connection.connectionInfo) {
+      return { success: false, error: 'Connection info unavailable' }
+    }
+
+    if (!this.rsyncManager) {
+      return { success: false, error: 'RsyncManager not configured' }
+    }
+
+    try {
+      this.emit('connection:syncing', connectionId)
+      
+      const result = await this.rsyncManager.syncOutbound(
+        localPath,
+        remoteBasePath,
+        connection.connectionInfo.sshHost,
+        connection.connectionInfo.sshUser
+      )
+
+      if (!result.success) {
+        console.warn(`[Tangent 2] Workspace sync failed:`, result.error)
+        return { success: false, error: result.error }
+      }
+
+      console.log(
+        `[Tangent 2] Workspace synced: ${result.filesSynced} files, ${result.bytesTransferred} bytes`
+      )
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[Tangent 2] Workspace sync error:`, message)
+      return { success: false, error: message }
     }
   }
 

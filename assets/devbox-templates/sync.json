@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "agentStop": {
+      "command": "powershell",
+      "args": ["-File", ".github/hooks/sync-workspace-to-primary.ps1"]
+    },
+    "sessionEnd": {
+      "command": "powershell",
+      "args": ["-File", ".github/hooks/full-workspace-sync.ps1"]
+    }
+  }
+}

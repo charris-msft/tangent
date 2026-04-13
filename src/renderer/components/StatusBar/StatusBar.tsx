@@ -1,5 +1,6 @@
 import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import type { Session } from '@shared/types'
+import { DevBoxStatus } from '../DevBoxStatus'
 
 declare const tangentAPI: {
   shell: {
@@ -10,10 +11,17 @@ declare const tangentAPI: {
   }
 }
 
+interface DevBoxInfo {
+  devBoxName: string
+  connectionState: 'starting' | 'provisioning' | 'tunneling' | 'ready' | 'syncing' | 'disconnected' | 'failed'
+  lastSyncTime?: number
+}
+
 interface StatusBarProps {
   sessions: Session[]
   activeSession: Session | undefined
   onToggleSettings: () => void
+  devBoxInfo?: DevBoxInfo
 }
 
 /** Agent type label mapping */
@@ -46,7 +54,7 @@ function formatTokens(count: number): string {
   return String(count)
 }
 
-export function StatusBar({ sessions, activeSession, onToggleSettings }: StatusBarProps) {
+export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInfo }: StatusBarProps) {
   const [editorPopupOpen, setEditorPopupOpen] = useState(false)
   const [editorValue, setEditorValue] = useState('')
   const popupRef = useRef<HTMLDivElement>(null)
@@ -97,6 +105,13 @@ export function StatusBar({ sessions, activeSession, onToggleSettings }: StatusB
     }
     setEditorPopupOpen(false)
   }, [editorValue])
+
+  const handleDevBoxReconnect = useCallback(() => {
+    if (activeSession && devBoxInfo) {
+      // TODO: Wire to remote reconnect logic once RemoteSessionManager exists
+      console.log('[StatusBar] DevBox reconnect requested for session', activeSession.id)
+    }
+  }, [activeSession, devBoxInfo])
 
   useEffect(() => {
     if (editorPopupOpen && inputRef.current) {
@@ -164,8 +179,20 @@ export function StatusBar({ sessions, activeSession, onToggleSettings }: StatusB
       {/* Spacer */}
       <span className="flex-1" />
 
-      {/* Right section: Metrics + CWD + keyboard hint */}
+      {/* Right section: DevBox status + Metrics + CWD + keyboard hint */}
       <div className="flex items-center gap-2 shrink-0">
+        {devBoxInfo && activeSession && (
+          <>
+            <DevBoxStatus
+              sessionId={activeSession.id}
+              devBoxName={devBoxInfo.devBoxName}
+              connectionState={devBoxInfo.connectionState}
+              lastSyncTime={devBoxInfo.lastSyncTime}
+              onReconnect={handleDevBoxReconnect}
+            />
+            <span className="mx-0.5" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
+          </>
+        )}
         {activeSession?.metrics && (activeSession.metrics.inputTokens > 0 || activeSession.metrics.outputTokens > 0) && (
           <>
             <span style={{ color: 'var(--text-muted)' }} title="Token usage (input / output)">

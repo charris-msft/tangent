@@ -30,4 +30,32 @@
 
 **Why manual dialog:** Attempted `npx shadcn@latest add dialog` but process hung on npm prompt. Existing dialogs (PermissionDialog, UserInputDialog) use simple custom overlays that match GitHub Dark theme perfectly. Followed that pattern instead.
 
+### 2026-04-13: DevBoxStatus Component (P1.12)
+**Created:** `src/renderer/components/DevBoxStatus.tsx` — compact status widget for Dev Box connection state.
+
+**Key patterns learned:**
+- **StatusBar integration:** StatusBar accepts optional `devBoxInfo?: DevBoxInfo` prop, shows DevBoxStatus widget when present (leftmost in right section).
+- **Connection state indicators:** 7 states mapped to emoji + color + animated flag:
+  - 🔵 Starting/Provisioning/Tunneling (blue, animated)
+  - 🟢 Ready (green, steady)
+  - 🟡 Syncing (yellow, animated)
+  - ⚫ Disconnected (gray)
+  - 🔴 Failed (red)
+- **Hover tooltip:** Shows Dev Box name, status, last sync time, connection info (IP, SSH port, ACP port). Uses absolute positioning, bottom-6 offset, z-50.
+- **Reconnect button:** Visible when disconnected/failed. Currently logs to console with TODO comment for RemoteSessionManager integration.
+- **Event listeners:** Subscribes to `tangentAPI.devbox.onHealthUpdated()` for real-time connection info updates.
+
+**Component features:**
+- Compact widget (icon + name + state badge)
+- Animated pulse for transitional states (starting/provisioning/tunneling/syncing)
+- Reconnect button (conditionally visible)
+- Rich tooltip with connection details (IP, ports, last sync)
+- Listens for health updates via IPC events
+- Respects GitHub Dark theme vars
+
+**Integration points:**
+- Modified `StatusBar.tsx`: added `devBoxInfo` prop, imported DevBoxStatus, added reconnect handler stub
+- Ready for RemoteSessionManager wiring once implemented
+- Positioned before metrics section in status bar right area
+
 <!-- Append learnings below -->

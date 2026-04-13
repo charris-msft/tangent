@@ -6,6 +6,7 @@ import type { DevBoxResource } from '@shared/devbox-types'
 // Mock dependencies
 class MockDevBoxManager extends EventEmitter {
   autoStart = vi.fn()
+  stopDevBox = vi.fn()
 }
 
 class MockSshTunnelManager extends EventEmitter {
@@ -16,6 +17,11 @@ class MockSshTunnelManager extends EventEmitter {
 
 class MockOpenSshProvisioner {
   ensureOpenSsh = vi.fn()
+}
+
+class MockRsyncManager extends EventEmitter {
+  syncOutbound = vi.fn()
+  syncInbound = vi.fn()
 }
 
 class MockSshClient extends EventEmitter {
@@ -57,6 +63,7 @@ describe('DevBoxConnector', () => {
   let devBoxManager: MockDevBoxManager
   let sshTunnelManager: MockSshTunnelManager
   let openSshProvisioner: MockOpenSshProvisioner
+  let rsyncManager: MockRsyncManager
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -65,6 +72,7 @@ describe('DevBoxConnector', () => {
     devBoxManager = new MockDevBoxManager()
     sshTunnelManager = new MockSshTunnelManager()
     openSshProvisioner = new MockOpenSshProvisioner()
+    rsyncManager = new MockRsyncManager()
 
     // Inject a mock SSH client factory
     const sshClientFactory = () => {
@@ -85,6 +93,7 @@ describe('DevBoxConnector', () => {
       devBoxManager as any,
       sshTunnelManager as any,
       openSshProvisioner as any,
+      rsyncManager as any,
       sshClientFactory as any
     )
   })
@@ -352,7 +361,76 @@ describe('DevBoxConnector', () => {
       await connector.disconnect(connectionId)
 
       expect(sshTunnelManager.closeTunnel).toHaveBeenCalledWith('tunnel-123')
+      expect(devBoxManager.stopDevBox).not.toHaveBeenCalled()
       expect(disconnectEvents).toEqual(['disconnected'])
+      expect(connector.getStatus(connectionId)).toBeUndefined()
+    })
+
+    it('should stop Dev Box when stopDevBox option is true', async () => {
+      const mockDevBox: DevBoxResource = {
+        id: 'devbox-123',
+        name: 'charrisdb5',
+        projectName: 'test-project',
+        poolName: 'default-pool',
+        state: 'Running',
+        connectionInfo: {
+          ipAddress: '10.0.0.1',
+          sshHost: 'charrisdb5.devbox.azure.com',
+          sshPort: 22,
+          sshUser: 'azureuser'
+        },
+        osType: 'Windows',
+        location: 'eastus'
+      }
+
+      devBoxManager.autoStart.mockResolvedValue(mockDevBox)
+      devBoxManager.stopDevBox.mockResolvedValue(undefined)
+      openSshProvisioner.ensureOpenSsh.mockResolvedValue(true)
+      sshTunnelManager.createTunnel.mockReturnValue('tunnel-123')
+      sshTunnelManager.getTunnelStatus.mockReturnValue({
+        status: 'connected',
+        reconnectAttempts: 0
+      })
+
+      const connectionId = await connector.connect('charrisdb5', 'test-project')
+
+      await connector.disconnect(connectionId, { stopDevBox: true })
+
+      expect(sshTunnelManager.closeTunnel).toHaveBeenCalledWith('tunnel-123')
+      expect(devBoxManager.stopDevBox).toHaveBeenCalledWith('test-project', 'charrisdb5')
+    })
+
+    it('should continue disconnect even if stopping Dev Box fails', async () => {
+      const mockDevBox: DevBoxResource = {
+        id: 'devbox-123',
+        name: 'charrisdb5',
+        projectName: 'test-project',
+        poolName: 'default-pool',
+        state: 'Running',
+        connectionInfo: {
+          ipAddress: '10.0.0.1',
+          sshHost: 'charrisdb5.devbox.azure.com',
+          sshPort: 22,
+          sshUser: 'azureuser'
+        },
+        osType: 'Windows',
+        location: 'eastus'
+      }
+
+      devBoxManager.autoStart.mockResolvedValue(mockDevBox)
+      devBoxManager.stopDevBox.mockRejectedValue(new Error('Failed to stop'))
+      openSshProvisioner.ensureOpenSsh.mockResolvedValue(true)
+      sshTunnelManager.createTunnel.mockReturnValue('tunnel-123')
+      sshTunnelManager.getTunnelStatus.mockReturnValue({
+        status: 'connected',
+        reconnectAttempts: 0
+      })
+
+      const connectionId = await connector.connect('charrisdb5', 'test-project')
+
+      await connector.disconnect(connectionId, { stopDevBox: true })
+
+      expect(devBoxManager.stopDevBox).toHaveBeenCalled()
       expect(connector.getStatus(connectionId)).toBeUndefined()
     })
 
@@ -510,6 +588,202 @@ describe('DevBoxConnector', () => {
       const status = connector.getStatus(failedConnectionId)
       expect(status?.state).toBe('failed')
       expect(status?.error).toBe('Start failed')
+    })
+  })
+
+  describe('syncWorkspaceOut', () => {
+    it('should sync workspace successfully', async () => {
+      const mockDevBox: DevBoxResource = {
+        id: 'devbox-123',
+        name: 'charrisdb5',
+        projectName: 'test-project',
+        poolName: 'default-pool',
+        state: 'Running',
+        connectionInfo: {
+          ipAddress: '10.0.0.1',
+          sshHost: 'charrisdb5.devbox.azure.com',
+          sshPort: 22,
+          sshUser: 'azureuser'
+        },
+        osType: 'Windows',
+        location: 'eastus'
+      }
+
+      devBoxManager.autoStart.mockResolvedValue(mockDevBox)
+      openSshProvisioner.ensureOpenSsh.mockResolvedValue(true)
+      sshTunnelManager.createTunnel.mockReturnValue('tunnel-123')
+      sshTunnelManager.getTunnelStatus.mockReturnValue({
+        status: 'connected',
+        reconnectAttempts: 0
+      })
+
+      rsyncManager.syncOutbound.mockResolvedValue({
+        success: true,
+        bytesTransferred: 1024,
+        filesSynced: 5
+      })
+
+      const connectionId = await connector.connect('charrisdb5', 'test-project')
+
+      const syncEvents: string[] = []
+      connector.on('connection:syncing', () => syncEvents.push('syncing'))
+
+      const result = await connector.syncWorkspaceOut(
+        connectionId,
+        '/local/workspace',
+        '/remote/workspace'
+      )
+
+      expect(result.success).toBe(true)
+      expect(rsyncManager.syncOutbound).toHaveBeenCalledWith(
+        '/local/workspace',
+        '/remote/workspace',
+        'charrisdb5.devbox.azure.com',
+        'azureuser'
+      )
+      expect(syncEvents).toEqual(['syncing'])
+    })
+
+    it('should fail if connection not found', async () => {
+      const result = await connector.syncWorkspaceOut(
+        'non-existent-id',
+        '/local/workspace',
+        '/remote/workspace'
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('not found')
+    })
+
+    it('should fail if connection info unavailable', async () => {
+      const mockDevBox: DevBoxResource = {
+        id: 'devbox-123',
+        name: 'charrisdb5',
+        projectName: 'test-project',
+        poolName: 'default-pool',
+        state: 'Running',
+        osType: 'Windows',
+        location: 'eastus'
+      }
+
+      // Mock connection without connection info
+      devBoxManager.autoStart.mockResolvedValue(mockDevBox)
+      
+      let connectionId = ''
+      try {
+        connectionId = await connector.connect('charrisdb5', 'test-project')
+      } catch {
+        // Expected to fail, get connection from internal map
+        const connections = (connector as any).connections as Map<string, any>
+        connectionId = Array.from(connections.keys())[0]
+      }
+
+      const result = await connector.syncWorkspaceOut(
+        connectionId,
+        '/local/workspace',
+        '/remote/workspace'
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('Connection info unavailable')
+    })
+
+    it('should fail if rsync manager not configured', async () => {
+      const connectorWithoutRsync = new DevBoxConnector(
+        devBoxManager as any,
+        sshTunnelManager as any,
+        openSshProvisioner as any,
+        undefined,
+        () => {
+          const client = new MockSshClient()
+          mockSshClients.push(client)
+          client.connect.mockImplementation(() => {
+            setTimeout(() => {
+              client.emit('ready')
+            }, 10)
+          })
+          return client
+        }
+      )
+
+      const mockDevBox: DevBoxResource = {
+        id: 'devbox-123',
+        name: 'charrisdb5',
+        projectName: 'test-project',
+        poolName: 'default-pool',
+        state: 'Running',
+        connectionInfo: {
+          ipAddress: '10.0.0.1',
+          sshHost: 'charrisdb5.devbox.azure.com',
+          sshPort: 22,
+          sshUser: 'azureuser'
+        },
+        osType: 'Windows',
+        location: 'eastus'
+      }
+
+      devBoxManager.autoStart.mockResolvedValue(mockDevBox)
+      openSshProvisioner.ensureOpenSsh.mockResolvedValue(true)
+      sshTunnelManager.createTunnel.mockReturnValue('tunnel-123')
+      sshTunnelManager.getTunnelStatus.mockReturnValue({
+        status: 'connected',
+        reconnectAttempts: 0
+      })
+
+      const connectionId = await connectorWithoutRsync.connect('charrisdb5', 'test-project')
+
+      const result = await connectorWithoutRsync.syncWorkspaceOut(
+        connectionId,
+        '/local/workspace',
+        '/remote/workspace'
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('RsyncManager not configured')
+    })
+
+    it('should handle rsync failure', async () => {
+      const mockDevBox: DevBoxResource = {
+        id: 'devbox-123',
+        name: 'charrisdb5',
+        projectName: 'test-project',
+        poolName: 'default-pool',
+        state: 'Running',
+        connectionInfo: {
+          ipAddress: '10.0.0.1',
+          sshHost: 'charrisdb5.devbox.azure.com',
+          sshPort: 22,
+          sshUser: 'azureuser'
+        },
+        osType: 'Windows',
+        location: 'eastus'
+      }
+
+      devBoxManager.autoStart.mockResolvedValue(mockDevBox)
+      openSshProvisioner.ensureOpenSsh.mockResolvedValue(true)
+      sshTunnelManager.createTunnel.mockReturnValue('tunnel-123')
+      sshTunnelManager.getTunnelStatus.mockReturnValue({
+        status: 'connected',
+        reconnectAttempts: 0
+      })
+
+      rsyncManager.syncOutbound.mockResolvedValue({
+        success: false,
+        bytesTransferred: 0,
+        filesSynced: 0,
+        error: 'Connection refused'
+      })
+
+      const connectionId = await connector.connect('charrisdb5', 'test-project')
+
+      const result = await connector.syncWorkspaceOut(
+        connectionId,
+        '/local/workspace',
+        '/remote/workspace'
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.error).toBe('Connection refused')
     })
   })
 })

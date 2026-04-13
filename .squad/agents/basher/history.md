@@ -132,3 +132,97 @@ Proactive test scaffolding enables:
 - Earlier detection of API mismatches between types and implementations
 - Faster convergence on correct interfaces through test-driven iteration
 - Clear documentation of expected behavior for all three managers
+
+### 2026-04-13 — DevBox Lifecycle Integration Tests (P1.13)
+
+**Context:** Created comprehensive integration tests for the complete DevBox connection flow orchestrated by `DevBoxConnector`. Unlike unit tests that mock dependencies, integration tests validate end-to-end workflows with multiple components working together.
+
+**What I did:**
+Created `src/main/devbox/__tests__/integration.test.ts` with 33 tests (all passing) organized into 9 suites:
+
+**Test suite structure:**
+1. **Full Connection Flow** (2 tests)
+   - Orchestrates complete flow: autoStart → ensureOpenSsh → createTunnel → verify → ready
+   - Validates custom SSH config (localPort, remotePort) is passed through correctly
+
+2. **Auto-Start Polling** (4 tests)
+   - Polls Dev Box state until Running with progress callbacks
+   - Handles Dev Box already running (no-op optimization)
+   - Fails if Dev Box enters Failed state
+   - Fails on timeout (5 minutes) waiting for Dev Box to start
+
+3. **SSH Tunnel Creation** (3 tests)
+   - Creates SSH tunnel with correct ports from connection info
+   - Passes SSH config to tunnel manager
+   - Fails if tunnel creation throws error
+
+4. **Health Monitoring** (3 tests)
+   - Waits for tunnel to be ready (polls until status=connected)
+   - Detects tunnel health check failures (reflects in connection status)
+   - Times out if tunnel never becomes ready (5s timeout)
+
+5. **Reconnection with Backoff** (3 tests)
+   - Triggers reconnect when tunnel enters error state
+   - Reflects exponential backoff attempts (1s, 2s, 4s, 8s, max 30s)
+   - Handles max reconnect attempts reached (updates state to failed)
+
+6. **OpenSSH Provisioning** (4 tests)
+   - Provisions OpenSSH on first-time setup (install → enable → verify)
+   - Skips provisioning if OpenSSH already running
+   - Fails if OpenSSH installation fails
+   - Fails if OpenSSH verification fails
+
+7. **Connection Failure Scenarios** (5 tests)
+   - Fails at step 1: Dev Box won't start
+   - Fails at step 2: SSH provisioning fails
+   - Fails at step 3: tunnel creation fails
+   - Fails at step 4: health check fails
+   - Fails if Dev Box has no connection info
+
+8. **State Transitions** (4 tests)
+   - Emits events through complete connection lifecycle (starting → provisioning → tunneling → ready)
+   - Emits failed event on any error
+   - Emits disconnected event on manual disconnect
+   - Tracks state through internal connection handle (ConnectionHandle)
+
+9. **Disconnect Flow** (3 tests)
+   - Cleans up tunnel and removes connection from registry
+   - Handles disconnect of non-existent connection gracefully
+   - Handles disconnect when tunnel close fails (marks as failed but continues)
+
+10. **Multiple Connections** (2 tests)
+    - Manages multiple connections independently (different tunnels, states)
+    - Disconnects one connection without affecting others
+
+**Mock architecture:**
+- Mocked `DevBoxManager`, `SshTunnelManager`, `OpenSshProvisioner`, `RsyncManager` (EventEmitter-based mocks)
+- Mocked `ssh2.Client` module to avoid real SSH connections
+- Mocked `fs.readFileSync` to avoid file system access
+- Injected SSH client factory into `DevBoxConnector` for testability
+- Followed exact pattern from existing `DevBoxConnector.test.ts` unit tests
+
+**Key testing patterns:**
+- Event tracking: Capture all emitted events to verify orchestration order
+- State verification: Check `ConnectionHandle` state at each step
+- Async coordination: Use `mockImplementation` + `setTimeout` for async readiness
+- Error injection: Mock failures at each orchestration step to validate error handling
+- Timeout simulation: Mock `getTunnelStatus` to return 'connecting' indefinitely for timeout tests
+
+**Mock challenges solved:**
+- **SSH client factory injection:** DevBoxConnector accepts optional factory; tests inject factory that creates MockSshClient instances
+- **File system access:** Avoided keyPath tests that require real file reading (delegated to unit tests)
+- **EventEmitter coordination:** Used `vi.fn().mockImplementation()` to capture events and simulate async state changes
+- **Test isolation:** Clear `mockSshClients` array in `beforeEach` to prevent cross-test pollution
+
+**Important insights:**
+1. Integration tests validate *orchestration* (step sequencing, event flow), not individual method behavior
+2. Mocks should be at component boundaries (managers) not internal implementation (fs, net, ssh2)
+3. Real SSH connections would make tests slow and flaky — always mock external I/O
+4. `sshClientFactory` injection enables test isolation without breaking production code
+5. Test timeouts (e.g., 10s for tunnel timeout test) must account for polling intervals
+
+**Next steps:**
+- Monitor test stability as DevBoxConnector evolves
+- Add integration tests for rsync sync operations when implemented
+- Coordinate with Rusty if DevBoxManager API changes break tests
+

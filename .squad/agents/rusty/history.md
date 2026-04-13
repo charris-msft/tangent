@@ -98,6 +98,61 @@ Created `src/main/devbox/AcpClient.ts` — wraps `@agentclientprotocol/sdk` with
 - Integrates with `@agentclientprotocol/sdk` v0.18.2
 - Ready for DevBoxManager to provide SSH-tunneled stdio stream
 
+### 2026-04-13: AcpProvisioner Implementation (P2.4 + P2.5)
+
+Created `src/main/devbox/AcpProvisioner.ts` — provisions CopilotACP as a Windows Scheduled Task on Dev Box:
+
+**Core Features:**
+- `checkProvisioned(sshClient)` — checks if CopilotACP task exists and is in Ready/Running state
+- `provisionAcpService(sshClient, force)` — creates and starts Windows Scheduled Task running `copilot --acp --port 3000 --allow-all-tools`
+- `verifyAcpService(sshClient, port)` — TCP probe via `Test-NetConnection` with 10 retries (1s delay) to verify service responsiveness
+- `ensureAcpService(sshClient, port)` — idempotent provisioner: checks → verifies → re-provisions if needed
+
+**Scheduled Task Configuration:**
+- Task name: `CopilotACP`
+- Trigger: At logon
+- Action: `copilot --acp --port 3000 --allow-all-tools`
+- Settings: 3 restarts on failure, 1-minute restart interval
+- Run level: Highest (admin privileges)
+- Force flag: overwrites existing task if present
+
+**Verification Logic:**
+- Uses `Test-NetConnection -ComputerName 127.0.0.1 -Port {port} -InformationLevel Quiet`
+- Retries up to 10 times with 1s delay between attempts
+- Allows time for Copilot CLI to start and bind to port
+- Returns `true` when PowerShell outputs `True`, indicating successful TCP connection
+
+**Force Re-Provisioning:**
+- `provisionAcpService()` accepts optional `force` parameter
+- `ensureAcpService()` passes `isProvisioned` as `force` when service is unresponsive
+- Allows re-registering and restarting task when existing task is hung/failed
+- PowerShell `-Force` flag ensures `Register-ScheduledTask` overwrites existing task
+
+**Design Patterns:**
+- Follows OpenSshProvisioner pattern exactly — same SSH exec approach
+- `execCommand()` helper wraps ssh2 exec with promise-based result
+- Returns `{ stdout, stderr, exitCode }` for PowerShell command execution
+- Silent failures via try/catch — returns `false` instead of throwing
+- Console warnings with `[Tangent 2]` prefix for all errors
+
+**PowerShell Command Execution:**
+- All commands prefixed with `powershell.exe -Command`
+- Uses single-quoted strings with escaped inner quotes for complex commands
+- `Register-ScheduledTask` piped to `Out-Null` to suppress verbose output
+- `Get-ScheduledTask` with `-ErrorAction SilentlyContinue` prevents errors when task doesn't exist
+
+**Testing:**
+- Comprehensive Vitest test suite in `__tests__/AcpProvisioner.test.ts`
+- Tests all methods: checkProvisioned, provisionAcpService, verifyAcpService, ensureAcpService
+- Mocks ssh2 Client with stream-based exec responses
+- Uses `setTimeout(() => handler(exitCode), 10)` to simulate async stream close
+- Extended timeouts for retry tests (15s-25s) to allow verification retries to complete
+
+**Integration Points:**
+- Uses ssh2 Client from SshTunnelManager/DevBoxConnector
+- Port defaults to 3000 (matches AcpClient connection)
+- Ready for DevBoxManager to provision before establishing ACP connection
+
 **Notable Decisions:**
 - Stream creation placeholder throws — DevBoxManager will provide pre-configured stream via `connectWithStream()`
 - Permission timeout is 60s (generous for user decision time)
@@ -420,3 +475,79 @@ Any state → failed (with error tracking)
 - P4: Integrate with DevBoxManager for auto-sync on connect and after agent turns
 - P4: Wire IPC handlers for progress events to renderer
 - P4: Create UI components for sync status display
+
+### 2026-04-13: P1.15, P3.3, P3.4 — DevBox Disconnect, Workspace Sync, and Hook Templates
+
+**What:** Extended DevBoxConnector with disconnect flow and workspace sync, created Copilot CLI hook templates.
+
+**P1.15 — Disconnect Flow:**
+- Extended `disconnect(connectionId, options)` with optional `stopDevBox` flag
+- Closes SSH tunnel via SshTunnelManager.closeTunnel()
+- Optionally stops Dev Box via DevBoxManager.stopDevBox() when flag is true
+- Continues gracefully even if stopping Dev Box fails
+- Cleans up connection tracking and emits 'connection:disconnected' event
+- Test coverage: 4 tests for disconnect scenarios (graceful, with stop, stop failure, non-existent)
+
+**P3.3 — Outbound Sync:**
+- Added `syncWorkspaceOut(connectionId, localPath, remoteBasePath)` method
+- Called after SSH tunnel established, before ACP session creation
+- Uses RsyncManager.syncOutbound() for local → Dev Box sync
+- Shows progress via 'connection:syncing' event
+- Blocks connection until sync completes
+- Returns `{ success: boolean, error?: string }` result
+- Stores connectionInfo in ConnectionHandle for later sync operations
+- Test coverage: 5 tests covering success, failures, rsync not configured
+
+**P3.4 — Hook Templates:**
+Created three template files in `assets/devbox-templates/`:
+
+1. **sync.json** — Copilot CLI hook configuration:
+   - `agentStop` hook → runs `sync-workspace-to-primary.ps1` after each agent turn
+   - `sessionEnd` hook → runs `full-workspace-sync.ps1` on session end
+   - Hooks deployed to `.github/hooks/` directory on Dev Box
+
+2. **sync-workspace-to-primary.ps1** — Incremental sync script:
+   - Triggered by agentStop hook
+   - Reads config from environment variables: TANGENT_LOCAL_PATH, TANGENT_REMOTE_PATH, TANGENT_SSH_HOST, TANGENT_SSH_USER, TANGENT_EXCLUDE_PATTERNS
+   - Uses rsync with `-avz --delete` flags (archive, verbose, compress, mirror)
+   - Syncs Dev Box → Local after each agent turn
+   - Logs to `$env:TEMP\tangent-sync.log`
+   - Always exits 0 to avoid breaking agent flow
+
+3. **full-workspace-sync.ps1** — Full sync script:
+   - Triggered by sessionEnd hook
+   - Same config as incremental sync
+   - Uses rsync with `-avzc` flags (adds checksum verification)
+   - Full integrity check on session end
+   - Logs to `$env:TEMP\tangent-sync.log`
+   - Always exits 0
+
+**Technical Implementation:**
+- RsyncManager is optional dependency in DevBoxConnector constructor (4th parameter)
+- ConnectionHandle now stores `connectionInfo?: DevBoxConnectionInfo` for sync operations
+- Added 'connection:syncing' event to DevBoxConnectorEvents interface
+- Sync methods check for connection existence, connection info, and RsyncManager availability
+- PowerShell scripts use `-split ','` to parse exclude patterns from env var
+- Scripts use `$ErrorActionPreference = 'Continue'` to ensure logging even on errors
+
+**Test Coverage:**
+- 21/21 tests passing ✅
+- Tests use MockRsyncManager for isolation
+- Tests verify rsync parameters, event emissions, error handling
+
+**Design Patterns:**
+- Follows existing DevBoxConnector patterns (EventEmitter, async/await, console.warn logging)
+- Optional parameters pattern: `options?: { stopDevBox?: boolean }`
+- Result objects for sync operations: `{ success: boolean, error?: string }`
+- Template files ready for deployment to Dev Box during first-time provisioning
+
+**Integration Points:**
+- Ready for DevBoxManager to deploy hook templates during provisioning
+- Hook scripts will be deployed to Dev Box `.github/hooks/` directory
+- Environment variables set by Copilot CLI runtime
+- Sync config file format matches RsyncManager's DevBoxSyncConfig type
+
+**Status:** ✅ Complete
+- All three tasks (P1.15, P3.3, P3.4) fully implemented and tested
+- Ready for P3 workspace sync integration
+
