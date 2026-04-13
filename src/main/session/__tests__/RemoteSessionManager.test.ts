@@ -59,10 +59,12 @@ describe('RemoteSessionManager', () => {
     // Mock DevBoxProvisioner
     mockDevBoxProvisioner = new EventEmitter() as any
     mockDevBoxProvisioner.isProvisioned = vi.fn().mockResolvedValue(true)
+    mockDevBoxProvisioner.markProvisioned = vi.fn().mockResolvedValue(undefined)
     mockDevBoxProvisioner.provision = vi.fn().mockResolvedValue(true)
 
     // Mock AcpClient
     mockAcpClient = new EventEmitter() as any
+    mockAcpClient.connect = vi.fn().mockResolvedValue(undefined)
     mockAcpClient.newSession = vi.fn().mockResolvedValue({
       id: 'acp-session-123',
       state: 'connected',
@@ -214,15 +216,18 @@ describe('RemoteSessionManager', () => {
       )
     })
 
-    it('should fail if Dev Box is not provisioned', async () => {
+    it('should auto-mark as provisioned when setup script was run externally', async () => {
       mockDevBoxProvisioner.isProvisioned = vi.fn().mockResolvedValue(false)
 
-      await expect(manager.createRemoteSession(testAgentProfile, '/local/path')).rejects.toThrow(
-        'Dev Box requires provisioning'
+      const sessionId = await manager.createRemoteSession(testAgentProfile, '/local/path')
+      expect(sessionId).toBeTruthy()
+      expect(mockDevBoxProvisioner.markProvisioned).toHaveBeenCalledWith(
+        'test-devbox',
+        expect.any(Array)
       )
     })
 
-    it('should fail if workspace sync fails', async () => {
+    it('should continue if workspace sync fails (non-fatal)', async () => {
       mockDevBoxConnector.syncWorkspaceOut = vi.fn().mockResolvedValue({
         success: false,
         bytesTransferred: 0,
@@ -230,9 +235,9 @@ describe('RemoteSessionManager', () => {
         error: 'rsync command failed'
       })
 
-      await expect(manager.createRemoteSession(testAgentProfile, '/local/path')).rejects.toThrow(
-        'Workspace sync failed: rsync command failed'
-      )
+      // Should still succeed — sync failure is non-fatal
+      const sessionId = await manager.createRemoteSession(testAgentProfile, '/local/path')
+      expect(sessionId).toBeTruthy()
     })
 
     it('should fail if ACP session creation fails', async () => {

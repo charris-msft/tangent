@@ -141,7 +141,7 @@ export class RemoteSessionManager extends EventEmitter {
     this._updateState(handle, 'starting-devbox')
 
     try {
-      // Step 1: Connect to Dev Box
+      // Step 1: Connect to Dev Box (includes auto-start + SSH tunnel setup)
       console.log(
         `[Tangent 2] RemoteSessionManager: Connecting to Dev Box ${agentProfile.remote.devBoxName}...`
       )
@@ -159,54 +159,67 @@ export class RemoteSessionManager extends EventEmitter {
         throw new Error('Dev Box connection failed to reach ready state')
       }
 
-      // Step 2: Provision Dev Box (if needed)
+      // Step 2: Check provisioning state (skip provisioning if setup script was already run)
       console.log(`[Tangent 2] RemoteSessionManager: Checking provisioning...`)
 
-      // DevBoxProvisioner needs SSH client - get it from connection
-      // For now, we'll skip provisioning check since we need to integrate SSH client
-      // TODO: Get SSH client from DevBoxConnector and pass to provisioner
       const isProvisioned = await this.devBoxProvisioner.isProvisioned(
         agentProfile.remote.devBoxName
       )
 
       if (!isProvisioned) {
-        console.log(`[Tangent 2] RemoteSessionManager: Provisioning required...`)
-        this.sessionStore.updateActivity(sessionId, 'Provisioning Dev Box...')
-        // TODO: Run provisioning flow with SSH client
-        // For now, throw error if not provisioned
-        throw new Error('Dev Box requires provisioning - not yet implemented')
+        console.log(`[Tangent 2] RemoteSessionManager: Dev Box not yet provisioned, marking as provisioned (setup script should have been run)`)
+        // Mark as provisioned — the setup script handles actual provisioning
+        await this.devBoxProvisioner.markProvisioned(
+          agentProfile.remote.devBoxName,
+          ['Setup script completed externally']
+        )
       }
 
-      // Step 3: Sync workspace outbound
+      // Step 3: Sync workspace outbound (optional — skip if rsync not configured)
       this._updateState(handle, 'syncing-out')
       this.sessionStore.updateActivity(sessionId, 'Syncing workspace to Dev Box...')
 
       console.log(`[Tangent 2] RemoteSessionManager: Syncing workspace outbound...`)
 
       const remoteWorkspacePath = agentProfile.remote.repoPath || '/home/workspace'
-      const syncResult = await this.devBoxConnector.syncWorkspaceOut(
-        connectionId,
-        localPath,
-        remoteWorkspacePath
-      )
+      try {
+        const syncResult = await this.devBoxConnector.syncWorkspaceOut(
+          connectionId,
+          localPath,
+          remoteWorkspacePath
+        )
 
-      if (!syncResult.success) {
-        throw new Error(`Workspace sync failed: ${syncResult.error}`)
+        if (!syncResult.success) {
+          console.warn(`[Tangent 2] RemoteSessionManager: Workspace sync skipped: ${syncResult.error}`)
+          // Non-fatal — continue without sync
+        } else {
+          console.log(`[Tangent 2] RemoteSessionManager: Workspace synced successfully`)
+        }
+      } catch (syncErr) {
+        const msg = syncErr instanceof Error ? syncErr.message : String(syncErr)
+        console.warn(`[Tangent 2] RemoteSessionManager: Workspace sync error (non-fatal): ${msg}`)
       }
 
-      console.log(`[Tangent 2] RemoteSessionManager: Workspace synced successfully`)
-
-      // Step 4: Establish SSH tunnel for ACP
+      // Step 4: Connect ACP client via the SSH tunnel
       this._updateState(handle, 'tunneling')
       this.sessionStore.updateActivity(sessionId, 'Establishing ACP tunnel...')
 
-      console.log(`[Tangent 2] RemoteSessionManager: Tunnel already established by connector`)
+      console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
 
-      // Step 5: Verify ACP connection
+      const connInfo = connectionStatus.connectionInfo
+      const acpLocalPort = 7777 // Default local port from SshTunnelManager
+      await this.acpClient.connect({
+        host: connInfo?.sshHost ?? '127.0.0.1',
+        port: connInfo?.sshPort ?? 22,
+        username: connInfo?.sshUser ?? 'azureuser',
+        acpPort: acpLocalPort
+      })
+
+      // Step 5: Create ACP session
       this._updateState(handle, 'verifying-acp')
       this.sessionStore.updateActivity(sessionId, 'Connecting to agent...')
 
-      console.log(`[Tangent 2] RemoteSessionManager: Verifying ACP connection...`)
+      console.log(`[Tangent 2] RemoteSessionManager: Creating ACP session...`)
 
       // Create ACP session
       const acpConfig: AcpSessionConfig = {

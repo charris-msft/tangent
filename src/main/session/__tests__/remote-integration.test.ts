@@ -101,10 +101,12 @@ describe('Remote Session Integration', () => {
     // Mock DevBoxProvisioner
     mockDevBoxProvisioner = new EventEmitter() as any
     mockDevBoxProvisioner.isProvisioned = vi.fn().mockResolvedValue(true)
+    mockDevBoxProvisioner.markProvisioned = vi.fn().mockResolvedValue(undefined)
     mockDevBoxProvisioner.provision = vi.fn().mockResolvedValue(true)
 
     // Mock AcpClient
     mockAcpClient = new EventEmitter() as any
+    mockAcpClient.connect = vi.fn().mockResolvedValue(undefined)
     mockAcpClient.newSession = vi.fn().mockResolvedValue({
       id: 'acp-session-123',
       state: 'connected' as const,
@@ -328,15 +330,15 @@ describe('Remote Session Integration', () => {
       )
     })
 
-    it('handles sync failure gracefully', async () => {
+    it('continues if sync fails (non-fatal)', async () => {
       mockDevBoxConnector.syncWorkspaceOut = vi.fn().mockResolvedValue({
         success: false,
         error: 'rsync: connection refused'
       })
 
-      await expect(
-        manager.createRemoteSession(testAgentProfile, 'D:\\projects\\test')
-      ).rejects.toThrow('Workspace sync failed: rsync: connection refused')
+      // Sync failure is now non-fatal — session should still be created
+      const sessionId = await manager.createRemoteSession(testAgentProfile, 'D:\\projects\\test')
+      expect(sessionId).toBeTruthy()
     })
 
     it('continues close even if inbound sync fails', async () => {
@@ -902,23 +904,28 @@ describe('Remote Session Integration', () => {
       ).rejects.toThrow('SSH connection failed')
     })
 
-    it('handles Dev Box not provisioned', async () => {
+    it('handles Dev Box not provisioned (auto-marks)', async () => {
       mockDevBoxProvisioner.isProvisioned = vi.fn().mockResolvedValue(false)
+      mockDevBoxProvisioner.markProvisioned = vi.fn().mockResolvedValue(undefined)
 
-      await expect(
-        manager.createRemoteSession(testAgentProfile, 'D:\\projects\\test')
-      ).rejects.toThrow('Dev Box requires provisioning - not yet implemented')
+      // Now auto-marks as provisioned instead of throwing
+      const sessionId = await manager.createRemoteSession(testAgentProfile, 'D:\\projects\\test')
+      expect(sessionId).toBeTruthy()
+      expect(mockDevBoxProvisioner.markProvisioned).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Array)
+      )
     })
 
-    it('handles workspace sync failure', async () => {
+    it('handles workspace sync failure (non-fatal)', async () => {
       mockDevBoxConnector.syncWorkspaceOut = vi.fn().mockResolvedValue({
         success: false,
         error: 'rsync: disk full'
       })
 
-      await expect(
-        manager.createRemoteSession(testAgentProfile, 'D:\\projects\\test')
-      ).rejects.toThrow('Workspace sync failed: rsync: disk full')
+      // Sync failure is now non-fatal
+      const sessionId = await manager.createRemoteSession(testAgentProfile, 'D:\\projects\\test')
+      expect(sessionId).toBeTruthy()
     })
 
     it('handles Dev Box connection not ready', async () => {

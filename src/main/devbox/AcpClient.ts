@@ -29,8 +29,8 @@ export class AcpClient extends EventEmitter {
   private pendingPermissionRequests = new Map<string, (response: AcpPermissionResponse) => void>()
 
   /**
-   * Connect to an ACP agent over the provided stream.
-   * For Dev Box, this will be an SSH-tunneled connection.
+   * Connect to an ACP agent via TCP (through the SSH-tunneled local port).
+   * The SshTunnelManager must be forwarding the remote ACP port to a local port first.
    */
   async connect(options: AcpConnectionOptions): Promise<void> {
     if (this.connection) {
@@ -41,11 +41,30 @@ export class AcpClient extends EventEmitter {
     try {
       this.state = 'connecting'
 
-      // For Dev Box integration, we expect options to include connection details.
-      // The actual stream creation (SSH tunnel + stdio) will be handled by DevBoxManager.
-      // This method accepts a pre-configured stream.
-      // For now, we'll create a placeholder that throws until DevBoxManager provides the stream.
-      throw new Error('Stream creation not yet implemented - DevBoxManager should provide stream')
+      // Connect to the local port that SshTunnelManager is forwarding to the remote ACP port
+      const { createConnection } = await import('net')
+      const socket = createConnection({ host: '127.0.0.1', port: options.acpPort })
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          socket.destroy()
+          reject(new Error(`ACP connection timeout (port ${options.acpPort})`))
+        }, 10000)
+
+        socket.on('connect', () => {
+          clearTimeout(timeout)
+          resolve()
+        })
+
+        socket.on('error', (err) => {
+          clearTimeout(timeout)
+          reject(err)
+        })
+      })
+
+      // Wrap the TCP socket as an ndJsonStream for the ACP SDK
+      const stream = ndJsonStream(socket, socket)
+      await this.connectWithStream(stream)
     } catch (err) {
       this.state = 'failed'
       const error = err instanceof Error ? err : new Error(String(err))
