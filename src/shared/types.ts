@@ -16,7 +16,7 @@ export type UIStatusLabel = 'shell' | 'running' | 'idle' | 'attention' | 'error'
 
 // === Session Kind ===
 
-export type SessionKind = 'shell' | 'copilot-sdk' | 'pty-agent'
+export type SessionKind = 'shell' | 'copilot-sdk' | 'pty-agent' | 'remote-agent'
 
 // === Session Metrics (from SDK) ===
 
@@ -29,6 +29,35 @@ export interface SessionMetrics {
   totalPremiumRequests: number
   contextTokens?: number
   contextLimit?: number
+}
+
+// === Remote Session State ===
+
+/**
+ * State lifecycle for remote agent execution on Dev Boxes.
+ * Tracks the progression from Dev Box startup through sync and ACP connection.
+ */
+export type RemoteSessionState =
+  | 'starting-devbox'
+  | 'syncing-out'
+  | 'tunneling'
+  | 'verifying-acp'
+  | 'running'
+  | 'syncing-back'
+
+// === Remote Session Metrics ===
+
+/**
+ * Metrics for remote agent sessions running on Dev Boxes.
+ * Tracks sync performance and tunnel reliability.
+ */
+export interface RemoteSessionMetrics {
+  syncOutCount: number
+  syncInCount: number
+  totalBytesSynced: number
+  tunnelUptime: number
+  reconnectionCount: number
+  avgSyncDurationMs: number
 }
 
 // === Session ===
@@ -54,6 +83,15 @@ export interface Session {
   agentEnv?: Record<string, string>
   sdkSessionId?: string
   metrics?: SessionMetrics
+  // Remote session fields (for kind = 'remote-agent')
+  remoteState?: RemoteSessionState
+  devBoxName?: string
+  devBoxProject?: string
+  remoteConnectionId?: string
+  remoteSyncState?: 'idle' | 'syncing-out' | 'syncing-in'
+  lastSyncTime?: number
+  acpSessionId?: string
+  remoteMetrics?: RemoteSessionMetrics
 }
 
 // === UI Status Indicator ===
@@ -81,6 +119,14 @@ export interface AgentProfile {
   cwdMode: 'activeSession'
   launchTarget: 'currentTab' | 'newTab' | 'path'
   cwdPath?: string
+  // Remote execution configuration (opt-in per agent)
+  remote?: {
+    enabled: boolean
+    devBoxProject?: string
+    devBoxName?: string
+    repoPath?: string
+    sshUser?: string
+  }
 }
 
 export interface ProjectFolder {
@@ -91,7 +137,7 @@ export interface ProjectFolder {
 }
 
 export interface AgentStoreData {
-  version: 2
+  version: 3
   groups: ProjectFolder[]
 }
 

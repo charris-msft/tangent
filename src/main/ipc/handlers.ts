@@ -352,6 +352,15 @@ export function registerIpcHandlers(deps: {
 
     acpClient.on('acp:message', (response) => {
       getWindow()?.webContents.send('acp:message', response)
+      
+      // Format and forward as terminal output
+      const formattedOutput = formatAcpResponseForTerminal(response)
+      if (formattedOutput) {
+        getWindow()?.webContents.send('acp:output', {
+          sessionId: response.sessionId,
+          text: formattedOutput
+        })
+      }
     })
 
     acpClient.on('acp:error', (error) => {
@@ -361,4 +370,63 @@ export function registerIpcHandlers(deps: {
       })
     })
   }
+}
+
+/**
+ * Format ACP agent response as human-readable terminal text.
+ * Converts JSON protocol messages to readable output for xterm.js.
+ */
+function formatAcpResponseForTerminal(response: any): string {
+  const lines: string[] = []
+  
+  // Add agent text response
+  if (response.text) {
+    lines.push(response.text)
+  }
+  
+  // Add tool execution updates
+  if (response.toolExecutions && response.toolExecutions.length > 0) {
+    for (const tool of response.toolExecutions) {
+      const statusIcon = tool.status === 'success' ? '✓' : 
+                        tool.status === 'error' ? '✗' : 
+                        '⋯'
+      
+      let toolLine = `${statusIcon} Tool: ${tool.name}`
+      
+      if (tool.source === 'mcp' && tool.mcpServerName) {
+        toolLine += ` (${tool.mcpServerName})`
+      }
+      
+      if (tool.status === 'running' && tool.progressMessage) {
+        toolLine += ` - ${tool.progressMessage}`
+      } else if (tool.status === 'error' && tool.error) {
+        toolLine += ` - Error: ${tool.error}`
+      }
+      
+      lines.push(toolLine)
+    }
+  }
+  
+  // Add status updates
+  if (response.status) {
+    const statusMessages: Record<string, string> = {
+      'processing': '🤔 Processing...',
+      'tool_executing': '🔧 Executing tools...',
+      'needs_input': '⌨️  Waiting for input...',
+      'completed': '✓ Completed',
+      'error': '✗ Error'
+    }
+    
+    const statusMessage = statusMessages[response.status]
+    if (statusMessage) {
+      lines.push(statusMessage)
+    }
+  }
+  
+  // Add error details
+  if (response.error) {
+    lines.push(`Error: ${response.error}`)
+  }
+  
+  return lines.length > 0 ? lines.join('\n') + '\n' : ''
 }

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { RsyncManager } from '../RsyncManager'
+import { RsyncManager, ConflictingFile } from '../RsyncManager'
+import { spawn } from 'child_process'
+import { EventEmitter } from 'events'
 
 // Mock node-rsync module
 const mockExecute = vi.fn()
@@ -8,6 +10,11 @@ vi.mock('node-rsync', () => ({
     execute: mockExecute
   },
   execute: mockExecute
+}))
+
+// Mock child_process spawn
+vi.mock('child_process', () => ({
+  spawn: vi.fn()
 }))
 
 describe('RsyncManager', () => {
@@ -312,6 +319,184 @@ total size is 45,678  speedup is 6.61`
 
     it.skip('should ignore config with wrong version', () => {
       // Skip: fs mocking is complex in ESM, tested manually
+    })
+  })
+
+  describe('conflict detection', () => {
+    const mockSpawn = spawn as unknown as ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('should detect conflicts when files have uncommitted changes', async () => {
+      // Mock rsync dry-run output
+      const mockRsyncProcess = new EventEmitter()
+      mockRsyncProcess.stdout = new EventEmitter()
+      mockRsyncProcess.stderr = new EventEmitter()
+
+      mockSpawn.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === 'rsync') {
+          setTimeout(() => {
+            mockRsyncProcess.stdout.emit('data', '>f+++++++++ file1.txt\n>f+++++++++ file2.js\n')
+            mockRsyncProcess.emit('close', 0)
+          }, 10)
+          return mockRsyncProcess
+        }
+
+        // Mock git status output
+        if (cmd === 'git') {
+          const mockGitProcess = new EventEmitter()
+          mockGitProcess.stdout = new EventEmitter()
+          setTimeout(() => {
+            mockGitProcess.stdout.emit('data', ' M file1.txt\n M file3.css\n')
+            mockGitProcess.emit('close', 0)
+          }, 10)
+          return mockGitProcess
+        }
+      })
+
+      const conflicts = await manager.detectConflicts(
+        testLocalPath,
+        testRemotePath,
+        testSshHost,
+        testSshUser
+      )
+
+      expect(conflicts).toHaveLength(1)
+      expect(conflicts[0].path).toBe('file1.txt')
+      expect(conflicts[0].hasUncommittedChanges).toBe(true)
+    })
+
+    it('should return empty array when no conflicts exist', async () => {
+      const mockRsyncProcess = new EventEmitter()
+      mockRsyncProcess.stdout = new EventEmitter()
+      mockRsyncProcess.stderr = new EventEmitter()
+
+      mockSpawn.mockImplementation((cmd: string) => {
+        if (cmd === 'rsync') {
+          setTimeout(() => {
+            mockRsyncProcess.stdout.emit('data', '>f+++++++++ file1.txt\n')
+            mockRsyncProcess.emit('close', 0)
+          }, 10)
+          return mockRsyncProcess
+        }
+
+        if (cmd === 'git') {
+          const mockGitProcess = new EventEmitter()
+          mockGitProcess.stdout = new EventEmitter()
+          setTimeout(() => {
+            mockGitProcess.stdout.emit('data', ' M file2.txt\n')
+            mockGitProcess.emit('close', 0)
+          }, 10)
+          return mockGitProcess
+        }
+      })
+
+      const conflicts = await manager.detectConflicts(
+        testLocalPath,
+        testRemotePath,
+        testSshHost,
+        testSshUser
+      )
+
+      expect(conflicts).toHaveLength(0)
+    })
+
+    it('should emit sync:conflict event when conflicts detected', async () => {
+      const mockRsyncProcess = new EventEmitter()
+      mockRsyncProcess.stdout = new EventEmitter()
+      mockRsyncProcess.stderr = new EventEmitter()
+
+      mockSpawn.mockImplementation((cmd: string) => {
+        if (cmd === 'rsync') {
+          setTimeout(() => {
+            mockRsyncProcess.stdout.emit('data', '>f+++++++++ conflict.txt\n')
+            mockRsyncProcess.emit('close', 0)
+          }, 10)
+          return mockRsyncProcess
+        }
+
+        if (cmd === 'git') {
+          const mockGitProcess = new EventEmitter()
+          mockGitProcess.stdout = new EventEmitter()
+          setTimeout(() => {
+            mockGitProcess.stdout.emit('data', ' M conflict.txt\n')
+            mockGitProcess.emit('close', 0)
+          }, 10)
+          return mockGitProcess
+        }
+      })
+
+      const conflictSpy = vi.fn()
+      manager.on('sync:conflict', conflictSpy)
+
+      // Set resolution immediately to prevent hanging
+      setTimeout(() => {
+        manager.setConflictResolution(`inbound:${testLocalPath}`, 'use-remote')
+      }, 50)
+
+      mockExecute.mockImplementation((params: any, callback: Function) => {
+        setTimeout(() => callback('sent 100 bytes'), 20)
+      })
+
+      await manager.syncInboundWithConflictCheck(
+        testRemotePath,
+        testLocalPath,
+        testSshHost,
+        testSshUser
+      )
+
+      expect(conflictSpy).toHaveBeenCalled()
+      const event = conflictSpy.mock.calls[0][0]
+      expect(event.files).toHaveLength(1)
+      expect(event.files[0].path).toBe('conflict.txt')
+    })
+
+    it('should skip conflicting files when resolution is keep-local', async () => {
+      const mockRsyncProcess = new EventEmitter()
+      mockRsyncProcess.stdout = new EventEmitter()
+      mockRsyncProcess.stderr = new EventEmitter()
+
+      mockSpawn.mockImplementation((cmd: string) => {
+        if (cmd === 'rsync') {
+          setTimeout(() => {
+            mockRsyncProcess.stdout.emit('data', '>f+++++++++ conflict.txt\n')
+            mockRsyncProcess.emit('close', 0)
+          }, 10)
+          return mockRsyncProcess
+        }
+
+        if (cmd === 'git') {
+          const mockGitProcess = new EventEmitter()
+          mockGitProcess.stdout = new EventEmitter()
+          setTimeout(() => {
+            mockGitProcess.stdout.emit('data', ' M conflict.txt\n')
+            mockGitProcess.emit('close', 0)
+          }, 10)
+          return mockGitProcess
+        }
+      })
+
+      // Set resolution to keep-local
+      setTimeout(() => {
+        manager.setConflictResolution(`inbound:${testLocalPath}`, 'keep-local')
+      }, 50)
+
+      mockExecute.mockImplementation((params: any, callback: Function) => {
+        setTimeout(() => callback('sent 100 bytes'), 20)
+      })
+
+      const result = await manager.syncInboundWithConflictCheck(
+        testRemotePath,
+        testLocalPath,
+        testSshHost,
+        testSshUser
+      )
+
+      expect(result.success).toBe(true)
+      // Verify exclude was added for conflicting file
+      expect(mockExecute).toHaveBeenCalled()
     })
   })
 })

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { canTransition } from '@shared/transitions'
-import type { Session, SessionMetrics, SessionStatus, ToolUseEntry } from '@shared/types'
+import type { Session, SessionMetrics, SessionStatus, ToolUseEntry, RemoteSessionState, RemoteSessionMetrics } from '@shared/types'
 
 export class SessionStore extends EventEmitter {
   private sessions = new Map<string, Session>()
@@ -185,5 +185,115 @@ export class SessionStore extends EventEmitter {
 
   getToolUse(sessionId: string): ToolUseEntry[] {
     return this.toolUseEntries.get(sessionId) ?? []
+  }
+
+  // === Remote Session State Management ===
+
+  /**
+   * Update remote session state (for kind = 'remote-agent').
+   * Does NOT override session.status — remote state tracks Dev Box/sync/ACP lifecycle separately.
+   */
+  setRemoteState(sessionId: string, state: RemoteSessionState): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    if (session.kind !== 'remote-agent') {
+      console.warn(`[SessionStore] setRemoteState called on non-remote session ${sessionId}`)
+      return
+    }
+
+    if (session.remoteState === state) return
+
+    console.log(`[SessionStore] Remote state: ${session.remoteState || 'none'} -> ${state} (session ${sessionId.slice(0,8)})`)
+    session.remoteState = state
+    session.updatedAt = Date.now()
+    this.emit('updated', session)
+    this.emit('session:remote-state-changed', { sessionId, state })
+  }
+
+  /**
+   * Update last sync timestamp and optional sync state.
+   */
+  updateLastSyncTime(sessionId: string, timestamp: number, syncState?: 'idle' | 'syncing-out' | 'syncing-in'): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    session.lastSyncTime = timestamp
+    if (syncState !== undefined) {
+      session.remoteSyncState = syncState
+    }
+    session.updatedAt = Date.now()
+    this.emit('updated', session)
+  }
+
+  /**
+   * Set ACP session ID for remote agent sessions.
+   */
+  setAcpSessionId(sessionId: string, acpSessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    session.acpSessionId = acpSessionId
+    session.updatedAt = Date.now()
+    this.emit('updated', session)
+  }
+
+  /**
+   * Set remote connection info (Dev Box name, project, connection ID).
+   */
+  setRemoteConnectionInfo(sessionId: string, devBoxName: string, devBoxProject: string, remoteConnectionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    session.devBoxName = devBoxName
+    session.devBoxProject = devBoxProject
+    session.remoteConnectionId = remoteConnectionId
+    session.updatedAt = Date.now()
+    this.emit('updated', session)
+  }
+
+  /**
+   * Update remote session metrics (sync counts, tunnel uptime, etc).
+   */
+  updateRemoteMetrics(sessionId: string, metrics: Partial<RemoteSessionMetrics>): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    if (session.kind !== 'remote-agent') {
+      console.warn(`[SessionStore] updateRemoteMetrics called on non-remote session ${sessionId}`)
+      return
+    }
+
+    if (!session.remoteMetrics) {
+      session.remoteMetrics = {
+        syncOutCount: 0,
+        syncInCount: 0,
+        totalBytesSynced: 0,
+        tunnelUptime: 0,
+        reconnectionCount: 0,
+        avgSyncDurationMs: 0
+      }
+    }
+
+    // Update only provided fields
+    if (metrics.syncOutCount !== undefined) session.remoteMetrics.syncOutCount = metrics.syncOutCount
+    if (metrics.syncInCount !== undefined) session.remoteMetrics.syncInCount = metrics.syncInCount
+    if (metrics.totalBytesSynced !== undefined) session.remoteMetrics.totalBytesSynced = metrics.totalBytesSynced
+    if (metrics.tunnelUptime !== undefined) session.remoteMetrics.tunnelUptime = metrics.tunnelUptime
+    if (metrics.reconnectionCount !== undefined) session.remoteMetrics.reconnectionCount = metrics.reconnectionCount
+    if (metrics.avgSyncDurationMs !== undefined) session.remoteMetrics.avgSyncDurationMs = metrics.avgSyncDurationMs
+
+    session.updatedAt = Date.now()
+    this.emit('updated', session)
+    this.emit('session:metrics-updated', { sessionId, metrics: session.remoteMetrics })
+  }
+
+  /**
+   * Get remote session metrics.
+   */
+  getRemoteMetrics(sessionId: string): RemoteSessionMetrics | undefined {
+    const session = this.sessions.get(sessionId)
+    if (!session || session.kind !== 'remote-agent') return undefined
+    return session.remoteMetrics
   }
 }

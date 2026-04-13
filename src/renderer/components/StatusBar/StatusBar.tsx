@@ -15,6 +15,8 @@ interface DevBoxInfo {
   devBoxName: string
   connectionState: 'starting' | 'provisioning' | 'tunneling' | 'ready' | 'syncing' | 'disconnected' | 'failed'
   lastSyncTime?: number
+  lastSyncDirection?: 'outbound' | 'inbound' | 'idle'
+  lastSyncFileCount?: number
 }
 
 interface StatusBarProps {
@@ -188,6 +190,8 @@ export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInf
               devBoxName={devBoxInfo.devBoxName}
               connectionState={devBoxInfo.connectionState}
               lastSyncTime={devBoxInfo.lastSyncTime}
+              lastSyncDirection={devBoxInfo.lastSyncDirection}
+              lastSyncFileCount={devBoxInfo.lastSyncFileCount}
               onReconnect={handleDevBoxReconnect}
             />
             <span className="mx-0.5" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>

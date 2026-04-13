@@ -21,7 +21,7 @@ import type { SessionStatus } from '@shared/types'
 export class StatusEngine {
   private oscParser: OscParser
   private systemB: SystemB
-  private systemA: SystemA
+  private systemA: SystemA | null = null
   private cwdTracker: CwdTracker
   private systemAActive = false
   private disposed = false
@@ -35,20 +35,45 @@ export class StatusEngine {
   ) {
     this.oscParser = new OscParser()
     this.systemB = new SystemB()
-    this.systemA = new SystemA(ptyId)
+
+    // Skip SystemA file watching for remote sessions
+    // Remote sessions get status from ACP events, not file watchers
+    const session = this.store.get(sessionId)
+    const isRemote = session && (session.kind === 'remote-agent' || session.remoteState !== undefined)
+
+    if (!isRemote) {
+      this.systemA = new SystemA(ptyId)
+    }
+
     this.cwdTracker = new CwdTracker(sessionId, store)
 
     this.wireOscParser()
     this.wireSystemB()
-    this.wireSystemA()
+
+    // Only wire SystemA for non-remote sessions
+    if (this.systemA) {
+      this.wireSystemA()
+    }
   }
 
   /**
    * Main entry point for PTY output.
    * Feeds data through OscParser first, then SystemB.
+   *
+   * SKIP ALL STATUS DETECTION FOR REMOTE SESSIONS:
+   * Remote sessions (kind = 'remote-agent' or remoteState set) get their
+   * status from ACP events, not terminal output parsing. StatusEngine would
+   * conflict with remote state transitions.
    */
   feed(data: string): void {
     if (this.disposed) return
+
+    // Skip status detection for remote sessions
+    const session = this.store.get(this.sessionId)
+    if (session && (session.kind === 'remote-agent' || session.remoteState !== undefined)) {
+      return
+    }
+
     this.oscParser.feed(data)
     this.systemB.feed(data)
     this.cwdTracker.handleOutput(data)
@@ -86,7 +111,9 @@ export class StatusEngine {
     }
     this.oscParser.removeAllListeners()
     this.systemB.dispose()
-    this.systemA.dispose()
+    if (this.systemA) {
+      this.systemA.dispose()
+    }
   }
 
   private wireOscParser(): void {

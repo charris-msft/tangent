@@ -55,7 +55,11 @@ function persistSessions(): void {
           agentType: s.agentType,
           agentCommand: s.agentCommand,
           agentArgs: s.agentArgs,
-          agentEnv: s.agentEnv
+          agentEnv: s.agentEnv,
+          // P4.17: Persist remote session fields
+          devBoxName: s.devBoxName,
+          devBoxProject: s.devBoxProject,
+          acpSessionId: s.acpSessionId
         }))
       }
       writeFileSync(SESSIONS_PATH, JSON.stringify(data, null, 2), 'utf-8')
@@ -181,8 +185,15 @@ app.whenReady().then(async () => {
       const saved = JSON.parse(raw)
       if (saved.sessions?.length > 0) {
         const agentSessions: Array<{ sessionId: string; ptyId: string; saved: typeof saved.sessions[0] }> = []
+        const remoteSessions: Array<typeof saved.sessions[0]> = []
 
         for (const s of saved.sessions) {
+          // P4.17: Detect remote sessions and handle separately
+          if (s.kind === 'remote-agent') {
+            remoteSessions.push(s)
+            continue
+          }
+
           const session = sessionManager.create(s.folderPath)
           if (s.isRenamed && s.name) {
             sessionStore.rename(session.id, s.name)
@@ -190,6 +201,47 @@ app.whenReady().then(async () => {
           if (s.agentCommand) {
             agentSessions.push({ sessionId: session.id, ptyId: session.ptyId, saved: s })
           }
+        }
+
+        // P4.17: Restore remote sessions
+        // Remote sessions need special handling:
+        // - Check if Dev Box is still running
+        // - If running → attempt reconnect
+        // - If stopped → show reconnect prompt (needs_input status)
+        for (const s of remoteSessions) {
+          if (!s.devBoxName || !s.devBoxProject) {
+            console.warn(
+              `[Tangent 2] Skipping remote session restore: missing Dev Box info`,
+              s.name
+            )
+            continue
+          }
+
+          // For now, create a placeholder session with needs_input status
+          // Full reconnection will be implemented once RemoteSessionManager is integrated
+          const sessionId = `remote-restore-${Date.now()}-${Math.random().toString(36).substring(7)}`
+          sessionStore.add({
+            id: sessionId,
+            kind: 'remote-agent',
+            agentType: s.agentType || 'copilot-cli',
+            name: s.name,
+            folderName: s.folderName,
+            folderPath: s.folderPath,
+            isRenamed: s.isRenamed || false,
+            status: 'needs_input',
+            lastActivity: 'Remote session - reconnect required',
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            ptyId: '',
+            isExternal: false,
+            remoteState: 'starting-devbox',
+            devBoxName: s.devBoxName,
+            devBoxProject: s.devBoxProject
+          })
+
+          console.log(
+            `[Tangent 2] Remote session restored (needs reconnection): ${s.devBoxName}`
+          )
         }
         // Select the previously active session by index
         if (typeof saved.activeIndex === 'number') {

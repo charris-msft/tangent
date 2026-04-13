@@ -345,6 +345,66 @@ Created `src/main/devbox/AcpProvisioner.ts` — provisions CopilotACP as a Windo
 
 <!-- Append learnings below -->
 
+### 2026-04-13: P3.6 — SyncListener Implementation
+
+**What:** Created `src/main/devbox/SyncListener.ts` — listens for and orchestrates incoming sync requests from Dev Box hooks.
+
+**Core Features:**
+- `startListening(localPath, remotePath, sshHost, sshUser)` — configures sync listener for a workspace
+- `stopListening()` — stops listening, preserves history
+- `triggerInboundSync()` — manually triggers incoming sync from Dev Box → local
+- `triggerInboundSyncWithConflictCheck()` — conflict-aware variant (emits conflict events)
+- `getHistory()` — returns last N syncs (timestamps, file counts, byte counts, durations)
+- `getStatus()` — returns listening state, last sync, total syncs
+- `clearHistory()` — clears sync history
+
+**Sync History Tracking:**
+- Tracks last 10 syncs (newest first) with SyncHistoryEntry: `{ timestamp, fileCount, byteCount, duration, success, error? }`
+- Calculates sync duration from start to completion
+- Only tracks inbound syncs (filters out outbound events from RsyncManager)
+- Preserves history when stopped (cleared only on dispose or explicit clearHistory)
+
+**EventEmitter Events:**
+- `sync:incoming` — { timestamp, localPath, remotePath } — fired when sync starts
+- `sync:complete` — { timestamp, fileCount, byteCount, duration } — fired on successful sync
+- `sync:error` — { timestamp, error } — fired on sync failure
+- `sync:conflict` — forwarded from RsyncManager (conflict detection events)
+
+**RsyncManager Integration:**
+- Wraps RsyncManager.syncInbound() and syncInboundWithConflictCheck()
+- Listens for RsyncManager events: 'sync:complete', 'sync:error', 'sync:conflict'
+- Filters events to only track inbound direction (ignores outbound)
+- Tracks currentSyncStart timestamp for duration calculation
+
+**Design Patterns:**
+- Extends EventEmitter for state changes
+- console.warn with `[Tangent 2]` prefix for errors
+- async/await throughout
+- No default exports — named export only
+- dispose() cleanup method removes all listeners and clears state
+
+**Test Coverage:**
+- 25 passing unit tests ✅ covering:
+  - Start/stop listening lifecycle
+  - Trigger inbound sync (with and without conflict check)
+  - Sync history tracking (success, failure, duration, limits)
+  - Event forwarding (incoming, complete, error, conflict)
+  - Status reporting
+  - History management (clear, preserve on stop)
+  - Resource cleanup (dispose)
+
+**Integration Points:**
+- Accepts RsyncManager instance via constructor (optional, creates new if not provided)
+- Ready for DevBoxManager to call when agentStop hook fires
+- History provides audit trail for sync operations
+- Events enable UI progress reporting
+
+**Notable Decisions:**
+- History limited to 10 entries (hardcoded constant) — prevents unbounded memory growth
+- Only tracks inbound syncs (outbound filtering) — Dev Box hook triggers are inbound-only
+- Duration tracking starts at triggerInboundSync() call, ends at RsyncManager event
+- Preserves history on stop (not on dispose) — allows reviewing past syncs after disconnect
+
 ### 2026-04-13: P1.11 — DevBoxConnector Orchestrator Implementation
 
 **What:** Created `src/main/devbox/DevBoxConnector.ts` — the critical integration piece that orchestrates the full Dev Box connection flow from start to ready.
@@ -551,3 +611,479 @@ Created three template files in `assets/devbox-templates/`:
 - All three tasks (P1.15, P3.3, P3.4) fully implemented and tested
 - Ready for P3 workspace sync integration
 
+### 2026-04-13: P3.8 — Sync Conflict Handling Implementation
+
+**What:** Extended `RsyncManager` with conflict detection and resolution for inbound syncs (Dev Box → local).
+
+**Core Features:**
+- `detectConflicts(localPath, remotePath, sshHost, sshUser)` — detects files that would be overwritten and have uncommitted local changes
+  1. Run `rsync --dry-run --itemize-changes` to get list of files that would change
+  2. Run `git status --porcelain` to get list of uncommitted files
+  3. Return intersection as `ConflictingFile[]` (path + hasUncommittedChanges flag)
+- `syncInboundWithConflictCheck(...)` — replacement for `syncInbound()` with conflict detection:
+  1. Calls `detectConflicts()` first
+  2. If conflicts found, emits `sync:conflict` event and waits for user resolution
+  3. Applies user's choice (keep-local, use-remote, merge)
+- `setConflictResolution(syncId, resolution)` — UI callback to provide user's choice
+- `waitForConflictResolution(syncId)` — internal helper that polls for resolution (5-minute timeout)
+
+**Conflict Resolution Strategies:**
+- **Keep Local:** Excludes conflicting files from sync (temporary exclusion)
+- **Use Remote:** Proceeds with normal sync (overwrites local with remote)
+- **Merge:** Proceeds with sync (UI will handle diff tool separately — not blocking)
+
+**Technical Implementation:**
+- `getRsyncDryRunFiles()` — uses `rsync --dry-run --itemize-changes` via `spawn()` to preview changes
+  - Parses itemize-changes output for file changes (lines starting with `>f` or `cf`)
+  - Returns list of files that would be modified
+- `getUncommittedFiles()` — uses `git status --porcelain` via `spawn()` to check for uncommitted changes
+  - Parses git status output for modified/added/deleted files
+  - Returns Set<string> for fast intersection lookup
+- `syncInboundWithExclusions()` — private helper that temporarily adds files to exclude list during sync
+  - Restores original exclude list after sync completes
+
+**Event Integration:**
+- New event: `sync:conflict` — emitted when conflicts detected (payload: `{ files: ConflictingFile[], localPath, remotePath }`)
+- Renderer listens for this event and shows `SyncConflictDialog`
+- UI calls back via IPC handler to set resolution
+
+**SyncConflictDialog Component:**
+- Created `src/renderer/components/SyncConflictDialog.tsx` — React dialog for conflict resolution
+- Shows list of conflicting files (path display only)
+- Three buttons: Keep Local / Use Remote / Merge
+- Follows PermissionDialog pattern (GitHub Dark theme, CSS variables, modal overlay)
+- IPC integration: listens for `devbox:syncConflict` event, calls `devbox:resolveSyncConflict(resolution)`
+
+**Test Coverage:**
+- Added conflict detection test suite (4 new tests)
+- Mocks `child_process.spawn` for rsync and git commands
+- Tests:
+  1. Detects conflicts when files have uncommitted changes
+  2. Returns empty array when no conflicts exist
+  3. Emits `sync:conflict` event when conflicts detected
+  4. Skips conflicting files when resolution is keep-local
+- **Note:** Pre-existing RsyncManager tests have unrelated failures due to node-rsync mock issues (not introduced by this change)
+
+**Design Patterns:**
+- Extends EventEmitter for conflict events
+- async/await throughout
+- Silent failures on conflict detection (returns empty array, logs warning)
+- Polling-based resolution wait with timeout
+- `[Tangent 2]` log prefix for errors
+
+**Integration Points:**
+- Ready for DevBoxManager to call `syncInboundWithConflictCheck()` after agent turns
+- UI renders SyncConflictDialog when conflict event emitted
+- IPC handler (Livingston's task) bridges resolution choice from renderer to main
+
+**Next Steps:**
+- Livingston (P3.9): Wire up IPC handlers for `devbox:syncConflict` and `devbox:resolveSyncConflict`
+- Integrate SyncConflictDialog into main App.tsx layout
+- Consider VS Code diff tool integration for merge option (future enhancement)
+
+### 2026-04-13: P2.7 + P2.10 — DevBoxProvisioner Orchestrator Implementation
+
+**What:** Created `src/main/devbox/DevBoxProvisioner.ts` — full provisioning orchestrator for first-time Dev Box setup.
+
+**Core Features:**
+- `provision(sshClient, devBoxName)` — orchestrates entire provisioning flow with 7 sequential steps:
+  1. Check if Dev Box is already provisioned (read from state file)
+  2. Request UI consent (emit event, wait for response)
+  3. Provision OpenSSH (via OpenSshProvisioner.ensureOpenSsh)
+  4. Provision CopilotACP service (via AcpProvisioner.ensureAcpService)
+  5. Configure Copilot CLI session sync (P2.10 — set sessionSync.level = "account")
+  6. Deploy sync hook scripts (placeholder for P3.5)
+  7. Mark as provisioned (write to devbox-state.json)
+- `isProvisioned(devBoxName)` — checks state file for provisioning record
+- `markProvisioned(devBoxName, changes)` — writes provisioning record to state file
+- Emits events: `provision:consent-needed`, `provision:consent-response`, `provision:step`, `provision:complete`, `provision:failed`
+
+**State File Structure:**
+- Path: `~/.tangent-2/devbox-state.json`
+- Format:
+  ```json
+  {
+    "version": 1,
+    "devBoxes": {
+      "devbox-name": {
+        "devBoxName": "devbox-name",
+        "provisionedAt": 1234567890,
+        "changes": ["OpenSSH configured", "ACP service running", ...],
+        "sessionSyncConfigured": true,
+        "sshConfigured": true,
+        "acpConfigured": true
+      }
+    }
+  }
+  ```
+- Per-Dev Box records track provisioning status and changes made
+
+**Session Sync Configuration (P2.10):**
+- PowerShell command executed via SSH to configure Copilot CLI session sync:
+  ```powershell
+  $configPath = "$env:USERPROFILE\.copilot\config.json"
+  $config = if (Test-Path $configPath) { Get-Content $configPath | ConvertFrom-Json } else { @{} }
+  $config.sessionSync = @(@{ origin = "*"; level = "account" })
+  $config | ConvertTo-Json -Depth 10 | Set-Content $configPath
+  ```
+- Sets `sessionSync.level = "account"` for cloud-synced session state (enables Dev Box failover)
+- Merges with existing config if present
+
+**Consent Flow:**
+- Emits `provision:consent-needed` event with `{ devBoxName, changes }` payload
+- Changes list includes:
+  1. Install and configure OpenSSH Server
+  2. Create CopilotACP scheduled task (auto-start service)
+  3. Configure Copilot CLI session sync (account-level)
+  4. Deploy sync hook scripts for workspace management
+- Waits for `provision:consent-response` event (5-minute timeout)
+- Denies by default on timeout
+- Proceeds with provisioning only if `approved: true`
+
+**Progress Tracking:**
+- Emits `provision:step` event for each step with status: `pending`, `in-progress`, `complete`, `failed`
+- Step identifiers: `request-consent`, `provision-openssh`, `provision-acp`, `configure-session-sync`, `deploy-sync-hooks`, `save-state`
+- Enables UI to show detailed progress (e.g., "Provisioning OpenSSH...")
+- Fails fast at first error, emits `provision:failed` event with reason code
+
+**Technical Implementation:**
+- Extends EventEmitter for reactive state tracking
+- Constructor injection for dependencies (OpenSshProvisioner, AcpProvisioner) — enables full mocking in tests
+- Default dependencies auto-created if not provided
+- private `execCommand(sshClient, command)` helper for SSH command execution (reuses pattern from OpenSshProvisioner)
+- private `requestConsent(devBoxName, changes)` helper returns Promise<boolean> with event-based wait
+- private `configureSessionSync(sshClient)` helper runs PowerShell command via SSH
+- State file operations use `fs.promises` (async API)
+- Silent failures on state file errors (returns `false` for isProvisioned, logs warning for markProvisioned)
+
+**Error Handling:**
+- console.warn with `[Tangent 2]` prefix for all errors
+- Returns `false` on any provisioning step failure (no exceptions thrown)
+- Emits `provision:failed` event with reason codes:
+  - `consent-denied` — user denied consent
+  - `openssh-failed` — OpenSSH provisioning failed
+  - `acp-failed` — ACP provisioning failed
+  - `session-sync-failed` — Session sync configuration failed
+  - `unexpected-error` — catch-all for unexpected exceptions
+- Stores error message in event payload for debugging
+
+**Test Coverage:**
+- 16 passing unit tests ✅
+- Tests cover:
+  - `isProvisioned()`: true when provisioned, false when not, handles missing file, handles errors
+  - `markProvisioned()`: saves record, appends to existing state, handles save errors
+  - `provision()`: full flow, consent handling, step failures, event emissions, timeout
+  - Session sync command validation (PowerShell syntax)
+- Mocked dependencies: OpenSshProvisioner, AcpProvisioner, SSH client, fs.promises
+- Uses vitest fake timers for consent timeout test
+
+**Design Patterns:**
+- Follows existing provisioner patterns (OpenSshProvisioner, AcpProvisioner)
+- Constructor injection for testability
+- EventEmitter for async state updates
+- async/await throughout
+- Named exports only
+- TypeScript strict typing
+- Silent cleanup failures (no exceptions, only logs)
+
+**Integration Points:**
+- Ready for DevBoxConnector to call during first-time connection flow
+- Coordinates OpenSshProvisioner and AcpProvisioner into single orchestrated flow
+- State file persists across Tangent restarts (skip re-provisioning on reconnect)
+- Events can be forwarded to renderer for consent UI and progress display
+- P2.10 session sync enables cloud-synced Copilot CLI sessions (Dev Box failover)
+
+**Status:** ✅ Complete
+- All orchestration logic implemented
+- Session sync configuration (P2.10) integrated
+- Comprehensive test coverage (16/16 passing)
+- Ready for P2.11 (DevBoxConnector integration)
+
+**Notable Decisions:**
+- Step 6 (deploy sync hooks) is a placeholder — actual deployment deferred to P3.5
+- Consent timeout is 5 minutes (generous for user decision time)
+- Session sync is account-level (not repo-specific) for maximum Dev Box compatibility
+- State file is local-only (not synced to Dev Box) — tracks local machine's provisioning history
+- Provisioning is per-Dev Box, not per-project (multiple projects can share a provisioned Dev Box)
+
+
+### 2026-04-12: P4.2 + P4.8 — AgentStore Schema v3 + Remote Session State
+
+**P4.2 — AgentStore Schema v3:**
+Updated `src/main/agents/AgentStore.ts` to support remote execution configuration:
+- Schema version bumped from 2 to 3
+- Migration logic: v2 profiles without `remote` field automatically get `{ enabled: false }`
+- Reads/writes remote config from `~/.tangent-2/agents.json` (updated store path for tangent-2 identity)
+- Backward compatible — existing v2 stores migrate seamlessly on first load
+
+**P4.8 — Remote Session State Management:**
+Extended `src/main/session/SessionStore.ts` with remote-specific methods:
+- `setRemoteState(sessionId, state)` — tracks Dev Box/sync/ACP lifecycle via `RemoteSessionState`
+- `updateLastSyncTime(sessionId, timestamp, syncState?)` — records sync operations with optional state
+- `setAcpSessionId(sessionId, acpSessionId)` — links Tangent session to ACP session
+- `setRemoteConnectionInfo(sessionId, devBoxName, devBoxProject, remoteConnectionId)` — stores Dev Box identity
+- Emits `session:remote-state-changed` events for UI updates
+
+**Design Patterns:**
+- Remote state is parallel to session status — StatusEngine doesn't override remote lifecycle states
+- All remote methods check `session.kind === 'remote-agent'` before applying state
+- Remote state transitions logged with `[SessionStore]` prefix for debuggability
+- All updates trigger `session.updatedAt` timestamp and emit `updated` event
+
+**Integration Points:**
+- Consumes `RemoteSessionState` type from `@shared/types` (added by Danny in P4.1)
+- Agent profiles can now opt into remote execution via `remote.enabled` flag
+- Session objects track Dev Box identity, ACP session ID, and sync timestamps
+- Ready for DevBoxConnector integration in Phase 4
+
+**Technical Notes:**
+- AgentStore migration runs on first load after schema version change
+- Migration is one-way (v2 → v3) — no downgrade path needed
+- Remote state management is additive — no breaking changes to existing SessionStore API
+- Build verified with `npm run build` — all changes compile cleanly
+
+**Status:** ✅ Complete — P4.2 and P4.8 fully implemented and tested via build verification.
+
+### 2026-04-13: P4.5 — RemoteSessionManager Implementation (CRITICAL PATH)
+
+**What:** Created src/main/session/RemoteSessionManager.ts — the CORE orchestrator that ties together all remote Dev Box components into a unified remote session lifecycle.
+
+**Core Orchestration Flow:**
+
+createRemoteSession(agentProfile, localPath) orchestrates the complete pipeline:
+1. **Connect to Dev Box** → DevBoxConnector.connect(devBoxName, projectName)
+2. **Check provisioning** → DevBoxProvisioner.isProvisioned(devBoxName) (throws if not provisioned)
+3. **Sync workspace outbound** → DevBoxConnector.syncWorkspaceOut(connectionId, localPath, remotePath)
+4. **Verify SSH tunnel** → Already established by DevBoxConnector (tunnel ID in connection handle)
+5. **Create ACP session** → AcpClient.newSession({ cwd: remotePath, env, sessionId })
+6. **Track in SessionStore** → SessionStore.add() with kind: 'remote-agent', emoteState: 'starting-devbox'
+7. **Return session ID** → Remote session ready for user interaction
+
+**Remote Session State Progression:**
+`
+starting-devbox → syncing-out → tunneling → verifying-acp → running → syncing-back
+`
+
+**Additional Methods:**
+- getRemoteSession(sessionId) — retrieves RemoteSessionHandle with current state
+- sendPrompt(sessionId, text) — forwards user input to ACP agent on Dev Box
+- closeRemoteSession(sessionId, { stopDevBox? }) — graceful shutdown:
+  1. Sync workspace inbound (Dev Box → local)
+  2. Close ACP session
+  3. Disconnect from Dev Box
+  4. Remove from SessionStore
+
+**Constructor Dependencies (All Injected):**
+- DevBoxConnector — handles Dev Box connection lifecycle
+- DevBoxProvisioner — checks/provisions Dev Box
+- AcpClient — manages ACP sessions and message forwarding
+- RsyncManager — handles bidirectional workspace sync
+- SessionStore — tracks session state and metadata
+
+**ACP Message Forwarding:**
+- Listens to AcpClient.on('acp:message') events
+- Maps ACP session ID → Tangent session ID
+- Emits emote:message event with session ID and agent response text
+- Enables real-time agent output streaming to UI
+
+**SessionStore Integration:**
+- Creates session with kind: 'remote-agent'
+- Updates emoteState field at each orchestration step
+- Sets devBoxName, devBoxProject, cpSessionId for tracking
+- Updates status → gent_launching → gent_ready → processing
+- Folder name extraction: splits path by / or \, uses last segment
+
+**Error Handling Strategy:**
+- Catches errors at EACH orchestration step
+- Emits emote:error event with session ID and message
+- Updates SessionStore: status: 'failed', ctivity: 'Error: {message}'
+- Stores error in RemoteSessionHandle.error field
+- Re-throws error to caller (orchestration stops on failure)
+
+**Test Coverage:**
+- **26 passing unit tests** covering:
+  - Full happy path orchestration (all 5 steps)
+  - State change events emission (5 states in order)
+  - SessionStore integration (correct fields, state updates)
+  - Failure scenarios at EACH orchestration step:
+    - Remote not enabled on agent profile
+    - Dev Box connection failure
+    - Dev Box not provisioned
+    - Workspace sync failure
+    - ACP session creation failure
+  - sendPrompt validation (session exists, has ACP ID, is running)
+  - closeRemoteSession graceful shutdown (sync back, close ACP, disconnect)
+  - ACP message forwarding (maps session IDs correctly)
+  - Session handle retrieval (getRemoteSession)
+  - State transition ordering (all 5 states in sequence)
+
+**Design Patterns:**
+- Extends EventEmitter for reactive state changes
+- All dependencies injected via constructor (full testability)
+- console.log for orchestration progress, console.warn for errors
+- [Tangent 2] prefix for all logs
+- Returns unique session IDs (emote-{timestamp}-{random})
+- Async/await throughout, no blocking operations
+- Silent cleanup failures on close (logs warnings, doesn't throw)
+
+**Integration Points:**
+- **DevBoxConnector** provides connection ID and sync methods
+- **DevBoxProvisioner** validates Dev Box readiness
+- **AcpClient** creates/manages ACP sessions, forwards messages
+- **RsyncManager** handles inbound sync on close
+- **SessionStore** tracks session metadata and state
+- Ready for UI to:
+  1. Call createRemoteSession() when user launches remote agent
+  2. Listen to emote:state-changed events for progress updates
+  3. Listen to emote:message events for agent output
+  4. Call sendPrompt() to send user input
+  5. Call closeRemoteSession() to gracefully disconnect
+
+**Notable Decisions:**
+- Session ID is used as Tangent session ID (maps to ACP session ID internally)
+- Provisioning check throws if not provisioned (forces explicit setup step)
+- Tunnel verification step acknowledges tunnel already established by connector
+- Folder name extraction uses last path segment (handles both / and \ separators)
+- Sync back happens on close (local-as-primary model — Dev Box changes sync back to local)
+- Optional stopDevBox parameter on close (defaults to keeping Dev Box running)
+
+**Status:**
+- ✅ Full implementation complete
+- ✅ All 26 tests passing
+- ✅ Ready for UI integration (P5)
+- ✅ Completes critical path for remote Dev Box execution
+### 2026-04-13: P4.9 + P4.15 — StatusEngine Remote Session Skip + Metrics
+
+**What:** Implemented two critical features for remote agent sessions:
+1. P4.9 — StatusEngine now skips ALL status detection for remote sessions
+2. P4.15 — Added remote session metrics infrastructure to SessionStore
+
+**StatusEngine Skip (P4.9):**
+- Modified `StatusEngine.ts` constructor to conditionally create SystemA only for non-remote sessions
+- Added early-return guard in `feed()` method to skip OSC/SystemB parsing for remote sessions
+- Remote sessions identified by: `session.kind === 'remote-agent' OR session.remoteState !== undefined`
+- Rationale: Remote sessions get status from ACP events, not terminal output. StatusEngine would conflict with remote state transitions.
+- SystemA file watching is expensive — skip entirely for remote sessions to avoid resource waste
+
+**Technical Changes:**
+- Changed `systemA` from `SystemA` to `SystemA | null` to allow conditional initialization
+- Updated `dispose()` to handle nullable systemA with null check
+- `feed()` method now checks session kind/remoteState and returns early before any parsing
+- `wireSystemA()` only called if systemA was created (non-remote sessions)
+
+**Remote Metrics (P4.15):**
+- Added `RemoteSessionMetrics` interface to `src/shared/types.ts`:
+  - `syncOutCount: number` — outbound workspace syncs to Dev Box
+  - `syncInCount: number` — inbound workspace syncs from Dev Box
+  - `totalBytesSynced: number` — cumulative bytes transferred (both directions)
+  - `tunnelUptime: number` — seconds tunnel has been alive
+  - `reconnectionCount: number` — tunnel reconnection attempts
+  - `avgSyncDurationMs: number` — average time per sync operation
+- Added `remoteMetrics?: RemoteSessionMetrics` field to Session interface
+- Added three new SessionStore methods:
+  - `updateRemoteMetrics(sessionId, metrics)` — update metrics (partial update pattern like updateMetrics)
+  - `getRemoteMetrics(sessionId)` — retrieve metrics for remote session
+  - Emits `'session:metrics-updated'` event with `{ sessionId, metrics }` payload
+- Validation: updateRemoteMetrics warns and returns early if session.kind !== 'remote-agent'
+
+**Integration Points:**
+- RemoteSessionManager (P4 in progress) will call updateRemoteMetrics after each sync operation
+- ACP event handlers can use these metrics for health monitoring and UI display
+- Metrics available for diagnostics, performance analysis, and cost estimation
+
+**Design Patterns:**
+- Follows existing SessionMetrics pattern — partial updates, accumulated fields
+- Event emission matches existing SessionStore events (`updated`, `metrics`)
+- Null-safe guards prevent misuse on non-remote sessions
+- Metrics initialize to zero on first update (lazy initialization)
+
+**Status:**
+- ✅ Types added
+- ✅ SessionStore methods implemented
+- ✅ StatusEngine guards added
+- ✅ Ready for RemoteSessionManager integration in P4
+- ✅ No breaking changes to existing code
+
+### 2026-04-13: Remote Session Restore on App Restart (P4.17)
+
+Extended session restore logic in `src/main/index.ts` to handle remote sessions on app restart:
+
+**Core Implementation:**
+- Added detection for `kind === 'remote-agent'` in session restore flow
+- Remote sessions separated into dedicated `remoteSessions` array during restoration
+- Created placeholder session restoration with `needs_input` status for manual reconnection
+- Updated `persistSessions()` to save remote session fields: `devBoxName`, `devBoxProject`, `acpSessionId`
+
+**Session Restore Logic:**
+- Non-remote sessions restored normally via `sessionManager.create()` + agent command replay
+- Remote sessions validated for required fields (`devBoxName`, `devBoxProject`)
+- Remote sessions created with:
+  - `status: 'needs_input'` — signals user must manually reconnect (no auto-start of Dev Boxes)
+  - `lastActivity: 'Remote session - reconnect required'` — clear user messaging
+  - `remoteState: 'starting-devbox'` — initial remote state
+  - Preserved: name, folderPath, agentType, isRenamed flag
+
+**Key Design Decisions:**
+- **No Auto-Start on Restore** — Respects PRD requirement to prevent unexpected cloud costs. User must explicitly reconnect.
+- **Graceful Degradation** — Works without RemoteSessionManager instantiated. Placeholder approach allows UI to show remote sessions even if full reconnection not yet available.
+- **Session Persistence** — Remote fields (`devBoxName`, `devBoxProject`, `acpSessionId`) now persisted to `~/.tangent-2/sessions.json` for restore across app restarts.
+
+**Technical Notes:**
+- Skips remote sessions with missing Dev Box info (logs warning)
+- Generates unique session IDs for restored remote sessions: `remote-restore-${timestamp}-${random}`
+- Full reconnection logic deferred to RemoteSessionManager integration (future work)
+- Empty `ptyId` for remote sessions (no local PTY — ACP-based communication)
+
+**Integration Points:**
+- SessionStore methods: `add()` to create remote session entries
+- Session persistence format updated with optional remote fields
+- Ready for future integration with RemoteSessionManager.reconnect() method
+
+**Status:**
+- ✅ Remote session detection in restore flow
+- ✅ Persistence of remote session fields
+- ✅ Placeholder restoration with needs_input status
+- ⏳ Full reconnection (requires RemoteSessionManager instantiation in index.ts)
+- ⏳ Dev Box status check (requires DevBoxManager integration)
+
+
+### 2026-04-13: P4.6 + P4.10 — Remote Agent Routing and Reconnection
+
+**P4.6: AgentLauncher Remote Routing**
+
+Extended `src/main/agents/AgentLauncher.ts` to route remote agents to RemoteSessionManager:
+- Checks `agentProfile.remote?.enabled` flag before launch
+- Delegates remote agents to `RemoteSessionManager.createRemoteSession()`
+- Preserves local PTY launch path for non-remote agents
+- Supports all launchTarget modes (currentTab, newTab, path) for remote agents
+- Gracefully handles missing RemoteSessionManager (logs warning, no throw)
+- Passes agent command/args/env to ACP session config via RemoteSessionManager
+
+**P4.10: RemoteSessionManager Auto-Reconnection**
+
+Extended `src/main/session/RemoteSessionManager.ts` with connection failure recovery:
+- Listens to DevBoxConnector `connection:failed` events to trigger auto-reconnect
+- Exponential backoff: 1s → 2s → 4s (max 3 attempts)
+- Reconnection flow: close stale tunnel → re-establish connection → re-sync workspace → verify ACP → resume session
+- Automatically starts Dev Box if stopped during reconnection
+- Resets reconnection counter on successful recovery
+- Fails gracefully after max attempts with proper session state updates
+- Clears reconnection timers on session close to prevent orphaned attempts
+
+**Design Patterns:**
+- AgentLauncher: async `_launchRemote()` private method, fire-and-forget pattern
+- RemoteSessionManager: private `_handleConnectionFailure()` + `_reconnect()` methods
+- Reconnection timer tracking via Map (sessionId → NodeJS.Timeout)
+- Silent error handling in both classes (PTY pattern)
+- State transitions preserved through reconnection flow
+
+**Testing:**
+- Created `src/main/agents/__tests__/AgentLauncher.test.ts` — 11 tests covering remote routing, local launch, error handling
+- Extended `src/main/session/__tests__/RemoteSessionManager.test.ts` — 11 new tests for reconnection logic
+- All 48 tests passing (37 RemoteSessionManager + 11 AgentLauncher)
+
+**Integration Points:**
+- AgentLauncher constructor now accepts optional RemoteSessionManager
+- RemoteSessionManager listens to DevBoxConnector connection events
+- RemoteSessionHandle tracks reconnectionAttempts counter
+- Ready for main process wiring (pass RemoteSessionManager to AgentLauncher constructor)

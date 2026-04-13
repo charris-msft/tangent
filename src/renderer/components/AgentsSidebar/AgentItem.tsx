@@ -53,6 +53,18 @@ export function AgentItem({
           >
             {agent.name}
           </span>
+          {agent.remote?.enabled && (
+            <span
+              className="text-[10px] px-1 py-0 rounded shrink-0"
+              style={{
+                background: 'var(--accent)',
+                color: '#fff'
+              }}
+              title={`Remote: ${agent.remote.devBoxName || 'Dev Box'}`}
+            >
+              Dev Box
+            </span>
+          )}
           {agent.launchTarget !== 'currentTab' && (
             <span
               className="text-[10px] px-1 py-0 rounded shrink-0"

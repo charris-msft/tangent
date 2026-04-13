@@ -199,6 +199,11 @@ const tangentAPI = {
       })
     },
 
+    onOutput: (cb: (output: { sessionId: string; text: string }) => void) => {
+      const handler = (_: any, output: any) => cb(output)
+      ipcRenderer.on('acp:output', handler)
+      return () => { ipcRenderer.removeListener('acp:output', handler) }
+    },
     onPermissionRequest: (cb: (request: any) => void) => {
       const handler = (_: any, request: any) => cb(request)
       ipcRenderer.on('acp:permission-request', handler)

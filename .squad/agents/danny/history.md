@@ -8,6 +8,26 @@
 
 ## Learnings
 
+### 2026-04-13 — ACP Architecture Documentation (P2.12)
+
+**Created: `docs/architecture/acp-integration.md`**
+- Comprehensive ACP integration architecture guide covering all aspects of remote agent execution
+- Sections: Overview, Connection Flow (SSH tunnel → ACP connect → session create), Session Lifecycle (create/resume/close), Permission Handling (ACP requests → UI approval → response), Error Recovery (tunnel drops, ACP crashes, sync conflicts)
+- Mermaid diagrams: Connection sequence diagram and Permission request flow
+- Key Files table: AcpClient, AcpProvisioner, DevBoxManager, SshTunnelManager, DevBoxConnector, acp-types, devbox-types, IPC handlers, RsyncManager
+- SDK API Surface: Details of ClientSideConnection, minimal Client interface (requestPermission, sessionUpdate), Session operations (newSession, unstable_resumeSession, unstable_closeSession, prompt), Events (SessionNotification), Permission protocol
+- Event Flow Summary: Main → AcpClient → Renderer events and Renderer → Main → AcpClient handlers
+- Implementation Notes: Session ID mapping (bidirectional), Permission timeout (60s default deny), Stream creation (SSH tunnel)
+- Testing Strategy: Unit tests for managers, integration tests for orchestration, E2E tests for UI flows, mock strategies
+- Security: SSH tunnel encryption, private key storage, permission approval, timeout fallback, session/workspace isolation
+
+**Design Principles Applied**
+- Tangent is ACP CLIENT (not agent) — implements minimal Client interface for simplicity
+- Session ID mapping essential for bridging Tangent local IDs ↔ ACP remote IDs
+- Permission callbacks bridge remote (ACP) requests to local (UI) for user control
+- Error recovery handles tunnel instability via exponential backoff + sync conflict UI
+- Cloud sync (Copilot CLI) decouples session state from Dev Box ephemeral compute
+
 <!-- Append learnings below -->
 
 ### 2025-06-01 — Remote Execution Architecture (Plan A)
@@ -130,3 +150,31 @@
 - Separated concerns: DevBox infrastructure vs. ACP protocol
 - Optional fields for progressive enhancement (e.g., `healthStatus`, `acpPort`)
 - Trade-off: Comprehensive types for IDE autocomplete vs. future flexibility (chose comprehensive — easier to extend than restrict)
+
+### 2025-06-01 — Phase 4 Type Extensions (P4.1 + P4.4)
+
+**Extended: `src/shared/types.ts`**
+- **P4.1: AgentProfile.remote** — Added optional `remote` object with `enabled`, `devBoxProject`, `devBoxName`, `repoPath`, `sshUser`. All fields optional to maintain backward compatibility. Enables per-agent opt-in to remote execution.
+- **P4.4: RemoteSessionState** — Added 6-state lifecycle type: `'starting-devbox' | 'syncing-out' | 'tunneling' | 'verifying-acp' | 'running' | 'syncing-back'`. Tracks remote session progression from Dev Box startup through ACP connection.
+- **P4.4: Session remote fields** — Extended `Session` interface with 7 optional fields: `remoteState`, `devBoxName`, `devBoxProject`, `remoteConnectionId`, `remoteSyncState`, `lastSyncTime`, `acpSessionId`. All optional for non-remote sessions.
+- **P4.4: SessionKind extension** — Added `'remote-agent'` to `SessionKind` union type. Discriminates remote sessions from local PTY/SDK sessions.
+- **P4.4: AgentStoreData version** — Bumped schema version from 2 to 3 for remote field migration support.
+
+**Design Principles Applied**
+- Backward compatibility: All new fields are optional, existing code unaffected
+- No breaking changes: Types remain extensible with union and interface patterns
+- Consistent with existing architecture: Remote fields follow same naming/structure as `sdkSessionId`, `metrics`, etc.
+- References external types: `RemoteSessionState` documented with JSDoc but kept self-contained (doesn't import from devbox-types/acp-types to avoid circular deps)
+- Progressive enhancement: Remote sessions inherit all base Session fields, add remote-specific tracking on top
+
+**Why Optional vs. Required**
+- Rationale: 90% of Tangent users won't use remote execution in v1. Making fields required would force null-checking noise in session rendering, PTY management, status engine, etc.
+- Trade-off: Type safety vs. developer ergonomics. Chose ergonomics — consumers can narrow with type guards (`session.kind === 'remote-agent'`) when needed.
+- Alternative considered: Separate `RemoteSession extends Session` interface. Rejected — would require discriminated union handling in every IPC boundary and React component.
+
+**Work Completed**
+- ✅ P4.1: AgentProfile remote fields
+- ✅ P4.4: RemoteSessionState type
+- ✅ P4.4: Session remote fields
+- ✅ P4.4: SessionKind extension
+- ✅ P4.4: AgentStoreData version bump
