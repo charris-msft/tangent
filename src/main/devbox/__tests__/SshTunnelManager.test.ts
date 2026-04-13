@@ -58,8 +58,12 @@ vi.mock('net', () => ({
     end: vi.fn()
   })),
   createServer: vi.fn(() => ({
-    listen: vi.fn((port, callback) => callback?.()),
-    close: vi.fn((callback) => callback?.()),
+    listen: vi.fn((...args: any[]) => {
+      // Support both (port, callback) and (port, host, callback)
+      const cb = args[args.length - 1]
+      if (typeof cb === 'function') cb()
+    }),
+    close: vi.fn((callback?: () => void) => callback?.()),
     on: vi.fn(),
   }))
 }))
@@ -85,10 +89,10 @@ describe('SshTunnelManager', () => {
 
   describe('createTunnel', () => {
     const mockConnectionInfo: DevBoxConnectionInfo = {
-      ipAddress: '10.0.0.5',
       sshHost: 'charrisdb5.eastus.devcenter.azure.com',
       sshPort: 22,
       sshUser: 'azureuser',
+      sshConfigured: true,
       acpPort: 8765,
     }
 
@@ -196,10 +200,10 @@ describe('SshTunnelManager', () => {
 
   describe('closeTunnel', () => {
     const mockConnectionInfo: DevBoxConnectionInfo = {
-      ipAddress: '10.0.0.5',
       sshHost: 'charrisdb5.eastus.devcenter.azure.com',
       sshPort: 22,
       sshUser: 'azureuser',
+      sshConfigured: true,
       acpPort: 8765,
     }
 
@@ -240,10 +244,10 @@ describe('SshTunnelManager', () => {
 
   describe('getTunnelStatus', () => {
     const mockConnectionInfo: DevBoxConnectionInfo = {
-      ipAddress: '10.0.0.5',
       sshHost: 'charrisdb5.eastus.devcenter.azure.com',
       sshPort: 22,
       sshUser: 'azureuser',
+      sshConfigured: true,
       acpPort: 8765,
     }
 
@@ -316,10 +320,10 @@ describe('SshTunnelManager', () => {
 
   describe('health monitoring', () => {
     const mockConnectionInfo: DevBoxConnectionInfo = {
-      ipAddress: '10.0.0.5',
       sshHost: 'charrisdb5.eastus.devcenter.azure.com',
       sshPort: 22,
       sshUser: 'azureuser',
+      sshConfigured: true,
       acpPort: 8765,
     }
 
@@ -373,10 +377,10 @@ describe('SshTunnelManager', () => {
 
   describe('auto-reconnect with exponential backoff', () => {
     const mockConnectionInfo: DevBoxConnectionInfo = {
-      ipAddress: '10.0.0.5',
       sshHost: 'charrisdb5.eastus.devcenter.azure.com',
       sshPort: 22,
       sshUser: 'azureuser',
+      sshConfigured: true,
       acpPort: 8765,
     }
 

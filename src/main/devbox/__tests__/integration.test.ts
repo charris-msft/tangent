@@ -12,6 +12,7 @@ class MockDevBoxManager extends EventEmitter {
   autoStart = vi.fn()
   startDevBox = vi.fn()
   getDevBox = vi.fn()
+  hasSshConfig = vi.fn().mockReturnValue(true)
 }
 
 // Mock SshTunnelManager
@@ -106,7 +107,7 @@ describe('DevBox Lifecycle Integration', () => {
     poolName: 'default-pool',
     state: 'Running',
     connectionInfo: {
-      ipAddress: '10.0.0.1',
+      sshConfigured: true,
       sshHost: 'charrisdb5.devbox.azure.com',
       sshPort: 22,
       sshUser: 'azureuser',

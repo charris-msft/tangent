@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - ssh2 has no type definitions
 import { Client } from 'ssh2'
-import { Socket, createConnection } from 'net'
+import { Socket, createConnection, createServer, Server } from 'net'
 import type { DevBoxConnectionInfo } from '@shared/devbox-types'
 
 interface TunnelConfig {
@@ -19,6 +19,7 @@ interface TunnelState {
   id: string
   config: TunnelConfig
   client: Client
+  server?: Server
   status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'
   error?: string
   reconnectAttempts: number
@@ -122,46 +123,44 @@ export class SshTunnelManager extends EventEmitter {
         return
       }
 
-      client.forwardOut(
-        '127.0.0.1',
-        config.localPort,
-        '127.0.0.1',
-        config.remotePort,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (err: any, stream: any) => {
-          if (err) {
-            console.warn('[Tangent 2] SSH tunnel forwardOut error:', err.message)
-            state.status = 'error'
-            state.error = err.message
-            this.emit('tunnel:error', { id: state.id, error: err.message })
-            this._scheduleReconnect(state)
-            return
-          }
-
-          state.status = 'connected'
-          state.error = undefined
-          state.reconnectAttempts = 0
-          this.emit('tunnel:connected', { id: state.id })
-
-          this._startHealthCheck(state)
-
-          stream.on('close', () => {
-            if (!this.disposed && this.tunnels.has(state.id)) {
-              console.warn('[Tangent 2] SSH tunnel stream closed')
-              state.status = 'disconnected'
-              this.emit('tunnel:disconnected', { id: state.id })
-              this._scheduleReconnect(state)
+      // Create a local TCP server that forwards connections through SSH
+      const server = createServer((localSocket: Socket) => {
+        client.forwardOut(
+          '127.0.0.1',
+          config.localPort,
+          '127.0.0.1',
+          config.remotePort,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (err: any, stream: any) => {
+            if (err) {
+              console.warn('[Tangent 2] SSH tunnel forwardOut error:', err.message)
+              localSocket.destroy()
+              return
             }
-          })
+            localSocket.pipe(stream).pipe(localSocket)
 
-          stream.on('error', (streamErr: any) => {
-            console.warn('[Tangent 2] SSH tunnel stream error:', streamErr.message)
-            state.status = 'error'
-            state.error = streamErr.message
-            this.emit('tunnel:error', { id: state.id, error: streamErr.message })
-          })
-        }
-      )
+            stream.on('close', () => localSocket.destroy())
+            localSocket.on('close', () => stream.close())
+          }
+        )
+      })
+
+      server.on('error', (err: any) => {
+        console.warn('[Tangent 2] SSH tunnel local server error:', err.message)
+        state.status = 'error'
+        state.error = err.message
+        this.emit('tunnel:error', { id: state.id, error: err.message })
+        this._scheduleReconnect(state)
+      })
+
+      server.listen(config.localPort, '127.0.0.1', () => {
+        state.server = server
+        state.status = 'connected'
+        state.error = undefined
+        state.reconnectAttempts = 0
+        this.emit('tunnel:connected', { id: state.id })
+        this._startHealthCheck(state)
+      })
     })
 
     client.on('error', (err: any) => {
@@ -202,6 +201,12 @@ export class SshTunnelManager extends EventEmitter {
     if (state.healthCheckTimer) {
       clearInterval(state.healthCheckTimer)
       state.healthCheckTimer = undefined
+    }
+
+    // Close local server before reconnecting
+    if (state.server) {
+      state.server.close()
+      state.server = undefined
     }
 
     if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
@@ -296,6 +301,15 @@ export class SshTunnelManager extends EventEmitter {
     if (state.healthCheckTimer) {
       clearInterval(state.healthCheckTimer)
       state.healthCheckTimer = undefined
+    }
+
+    if (state.server) {
+      try {
+        state.server.close()
+      } catch (err) {
+        // Silent fail — already cleaning up
+      }
+      state.server = undefined
     }
 
     try {

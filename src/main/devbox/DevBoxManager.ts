@@ -14,9 +14,22 @@ const API_VERSION = '2024-02-01'
 const TOKEN_SCOPE = 'https://devcenter.azure.com/.default'
 const CONFIG_PATH = join(homedir(), '.tangent', 'devbox-config.json')
 
+interface DevBoxTunnelConfig {
+  tunnelHost: string
+  sshUser: string
+  sshPort?: number
+  sshKeyPath?: string
+}
+
 interface DevBoxConfig {
   devCenterEndpoint: string
   projectName: string
+  /** Per-devbox SSH tunnel configuration (keyed by Dev Box name). */
+  devBoxes?: Record<string, DevBoxTunnelConfig>
+  /** Legacy single-devbox fields (used if devBoxes map is absent). */
+  tunnelHost?: string
+  sshUser?: string
+  sshKeyPath?: string
 }
 
 export interface DevBoxManagerEvents {
@@ -258,7 +271,7 @@ export class DevBoxManager extends EventEmitter {
 
   /**
    * Get connection info for a Dev Box.
-   * Uses the Dev Center remote-connection endpoint.
+   * Merges Azure API info (webUrl, rdpConnectionUrl) with local tunnel config.
    */
   async getConnectionInfo(
     projectName: string,
@@ -270,17 +283,58 @@ export class DevBoxManager extends EventEmitter {
         'GET',
         `/projects/${projectName}/users/me/devboxes/${devBoxName}/remoteConnection`
       )
+
+      // Look up per-devbox tunnel config
+      const tunnelCfg = this.getTunnelConfig(devBoxName)
+
       return {
-        ipAddress: data.rdpConnectionUrl ?? '',
-        sshHost: data.webUrl ?? data.rdpConnectionUrl ?? '',
-        sshPort: 22,
-        sshUser: 'azureuser'
+        webUrl: data.webUrl ?? undefined,
+        rdpConnectionUrl: data.rdpConnectionUrl ?? undefined,
+        sshHost: tunnelCfg?.tunnelHost ?? '',
+        sshPort: tunnelCfg?.sshPort ?? 22,
+        sshUser: tunnelCfg?.sshUser ?? 'azureuser',
+        sshKeyPath: tunnelCfg?.sshKeyPath,
+        sshConfigured: !!tunnelCfg?.tunnelHost,
+        acpPort: 3000
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Tangent] Failed to get connection info for ${devBoxName}:`, message)
       return null
     }
+  }
+
+  /**
+   * Check whether a Dev Box has SSH tunnel configuration.
+   * Use this as a preflight before auto-starting a Dev Box.
+   */
+  hasSshConfig(devBoxName: string): boolean {
+    const cfg = this.getTunnelConfig(devBoxName)
+    return !!cfg?.tunnelHost
+  }
+
+  /**
+   * Get the tunnel configuration for a specific Dev Box.
+   * Checks per-devbox map first, then falls back to top-level fields.
+   */
+  private getTunnelConfig(devBoxName: string): DevBoxTunnelConfig | null {
+    if (!this.config) return null
+
+    // Per-devbox config takes priority
+    if (this.config.devBoxes?.[devBoxName]) {
+      return this.config.devBoxes[devBoxName]
+    }
+
+    // Fall back to top-level fields (single Dev Box convenience)
+    if (this.config.tunnelHost) {
+      return {
+        tunnelHost: this.config.tunnelHost,
+        sshUser: this.config.sshUser ?? 'azureuser',
+        sshKeyPath: this.config.sshKeyPath
+      }
+    }
+
+    return null
   }
 
   /**

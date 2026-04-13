@@ -179,21 +179,20 @@ export function DevBoxStatus({
               </div>
               
               {/* Connection info section */}
-              {(connectionInfo?.ipAddress || connectionInfo?.sshPort || connectionInfo?.acpPort) && (
+              {(connectionInfo?.sshHost || connectionInfo?.sshPort || connectionInfo?.acpPort) && (
                 <div className="pt-1 mt-1 border-t border-[var(--bg-hover)]">
-                  {connectionInfo?.ipAddress && (
+                  {connectionInfo?.sshHost && (
                     <div className="flex justify-between">
-                      <span style={{ color: 'var(--text-muted)' }}>IP:</span>
-                      <span style={{ color: 'var(--text-secondary)' }} className="font-mono">
-                        {connectionInfo.ipAddress}
+                      <span style={{ color: 'var(--text-muted)' }}>SSH:</span>
+                      <span style={{ color: 'var(--text-secondary)' }} className="font-mono text-[10px]">
+                        {connectionInfo.sshUser}@{connectionInfo.sshHost}:{connectionInfo.sshPort}
                       </span>
                     </div>
                   )}
-                  {connectionInfo?.sshPort && (
+                  {!connectionInfo?.sshConfigured && (
                     <div className="flex justify-between">
-                      <span style={{ color: 'var(--text-muted)' }}>SSH:</span>
-                      <span style={{ color: 'var(--text-secondary)' }} className="font-mono">
-                        {connectionInfo.sshPort}
+                      <span style={{ color: 'var(--idle)' }} className="text-[10px]">
+                        ⚠ No SSH tunnel configured
                       </span>
                     </div>
                   )}

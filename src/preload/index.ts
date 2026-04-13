@@ -153,6 +153,8 @@ const tangentAPI = {
 
   devbox: {
     list: () => ipcRenderer.invoke('devbox:list'),
+    hasSshConfig: (devBoxName: string) =>
+      ipcRenderer.invoke('devbox:hasSshConfig', devBoxName),
     start: (projectName: string, devBoxName: string) =>
       ipcRenderer.invoke('devbox:start', projectName, devBoxName),
     stop: (projectName: string, devBoxName: string) =>

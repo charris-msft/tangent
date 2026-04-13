@@ -28,13 +28,24 @@ export interface DevBoxHealthStatus {
 
 /**
  * Connection information for a Dev Box.
- * Includes SSH details and port configuration.
+ * RDP fields come from the Azure API; SSH fields come from user config (dev tunnel).
  */
 export interface DevBoxConnectionInfo {
-  ipAddress: string
+  /** RDP web URL from Azure API (for browser-based access). */
+  webUrl?: string
+  /** RDP connection URL from Azure API (for native RDP client). */
+  rdpConnectionUrl?: string
+  /** SSH host — from user config (dev tunnel URL). Not from Azure API. */
   sshHost: string
+  /** SSH port — defaults to 22. */
   sshPort: number
+  /** SSH username on the Dev Box. */
   sshUser: string
+  /** Path to SSH private key for auth (optional, uses ssh-agent if absent). */
+  sshKeyPath?: string
+  /** Whether SSH connectivity is configured (tunnel host in config). */
+  sshConfigured: boolean
+  /** ACP port on the Dev Box for Copilot protocol (default 3000). */
   acpPort?: number
 }
 

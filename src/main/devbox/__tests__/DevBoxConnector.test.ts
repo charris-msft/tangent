@@ -7,6 +7,7 @@ import type { DevBoxResource } from '@shared/devbox-types'
 class MockDevBoxManager extends EventEmitter {
   autoStart = vi.fn()
   stopDevBox = vi.fn()
+  hasSshConfig = vi.fn().mockReturnValue(true)
 }
 
 class MockSshTunnelManager extends EventEmitter {
@@ -111,7 +112,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser',
@@ -201,7 +202,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -233,7 +234,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -263,7 +264,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -294,7 +295,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -336,7 +337,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -374,7 +375,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -408,7 +409,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -449,7 +450,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -487,7 +488,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -529,7 +530,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -600,7 +601,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -713,7 +714,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'
@@ -750,7 +751,7 @@ describe('DevBoxConnector', () => {
         poolName: 'default-pool',
         state: 'Running',
         connectionInfo: {
-          ipAddress: '10.0.0.1',
+          sshConfigured: true,
           sshHost: 'charrisdb5.devbox.azure.com',
           sshPort: 22,
           sshUser: 'azureuser'

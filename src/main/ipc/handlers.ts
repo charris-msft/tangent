@@ -265,6 +265,11 @@ export function registerIpcHandlers(deps: {
     return devBoxManager.listDevBoxes()
   })
 
+  ipcMain.handle('devbox:hasSshConfig', async (_, devBoxName: string) => {
+    if (!devBoxManager) return false
+    return devBoxManager.hasSshConfig(devBoxName)
+  })
+
   ipcMain.handle('devbox:start', async (_, projectName: string, devBoxName: string) => {
     if (!devBoxManager) return false
     return devBoxManager.startDevBox(projectName, devBoxName)

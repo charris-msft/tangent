@@ -20,6 +20,7 @@ const STATE_BADGES: Record<string, { label: string; color: string; icon: string 
 
 export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
   const [devBoxes, setDevBoxes] = useState<DevBoxResource[]>([])
+  const [sshStatus, setSshStatus] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -33,12 +34,26 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
     setLoading(true)
     setError(null)
     setDevBoxes([])
+    setSshStatus({})
 
     window.tangentAPI.devbox
       .list()
-      .then((boxes: DevBoxResource[]) => {
+      .then(async (boxes: DevBoxResource[]) => {
         setDevBoxes(boxes)
         setLoading(false)
+
+        // Check SSH config for each Dev Box in parallel
+        const statuses: Record<string, boolean> = {}
+        await Promise.all(
+          boxes.map(async (box) => {
+            try {
+              statuses[box.name] = await window.tangentAPI.devbox.hasSshConfig(box.name)
+            } catch {
+              statuses[box.name] = false
+            }
+          })
+        )
+        setSshStatus(statuses)
       })
       .catch((err: Error) => {
         setError(err.message || 'Failed to fetch Dev Boxes')
@@ -70,6 +85,9 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
   }, [])
 
   if (!open) return null
+
+  const selectedDevBox = devBoxes.find(db => db.id === selectedId)
+  const selectedHasSsh = selectedDevBox ? sshStatus[selectedDevBox.name] : false
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -135,6 +153,7 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
             {devBoxes.map(devBox => {
               const badge = STATE_BADGES[devBox.state] || { label: 'Unknown', color: 'var(--text-muted)', icon: '⚫' }
               const isSelected = selectedId === devBox.id
+              const hasSsh = sshStatus[devBox.name]
 
               return (
                 <button
@@ -156,6 +175,14 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
                         <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded" style={{ color: badge.color }}>
                           {badge.icon} {badge.label}
                         </span>
+                        {hasSsh !== undefined && (
+                          <span
+                            className="text-xs px-1.5 py-0.5 rounded"
+                            style={{ color: hasSsh ? 'var(--running)' : 'var(--idle)' }}
+                          >
+                            {hasSsh ? '🔗 SSH' : '⚠ No tunnel'}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs mb-1" style={{ color: 'var(--text-secondary)' }}>
                         Project: {devBox.projectName}
@@ -168,6 +195,23 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
                 </button>
               )
             })}
+          </div>
+        )}
+
+        {/* Tunnel setup warning when selected Dev Box has no SSH */}
+        {selectedDevBox && !selectedHasSsh && (
+          <div
+            className="mb-3 p-3 rounded text-xs"
+            style={{ background: 'rgba(227, 179, 65, 0.1)', border: '1px solid var(--idle)' }}
+          >
+            <p className="font-medium mb-1" style={{ color: 'var(--idle)' }}>
+              SSH tunnel not configured for "{selectedDevBox.name}"
+            </p>
+            <p style={{ color: 'var(--text-secondary)' }}>
+              Run the setup script on your Dev Box via RDP, then add the tunnel host to{' '}
+              <code style={{ fontSize: '0.65rem' }}>~/.tangent/devbox-config.json</code> under{' '}
+              <code style={{ fontSize: '0.65rem' }}>devBoxes.{selectedDevBox.name}.tunnelHost</code>.
+            </p>
           </div>
         )}
 

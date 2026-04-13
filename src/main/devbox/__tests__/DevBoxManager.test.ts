@@ -103,7 +103,7 @@ describe('DevBoxManager', () => {
       unconfigured.dispose()
     })
 
-    it('returns empty array on API error', async () => {
+    it('throws on API error', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: false,
         status: 403,
@@ -111,8 +111,7 @@ describe('DevBoxManager', () => {
         text: vi.fn().mockResolvedValue('Access denied')
       } as any)
 
-      const result = await manager.listDevBoxes()
-      expect(result).toEqual([])
+      await expect(manager.listDevBoxes()).rejects.toThrow('Failed to list Dev Boxes')
     })
   })
 
@@ -198,6 +197,58 @@ describe('DevBoxManager', () => {
       expect(result).not.toBeNull()
       expect(result?.sshPort).toBe(22)
       expect(result?.sshUser).toBe('azureuser')
+      expect(result?.webUrl).toBe('https://charrisdb5.eastus.devcenter.azure.com')
+      expect(result?.rdpConnectionUrl).toBe('rdp://10.0.0.5')
+      // No tunnel config → sshConfigured should be false
+      expect(result?.sshConfigured).toBe(false)
+    })
+
+    it('merges tunnel config when devBoxes map is present', async () => {
+      const configWithTunnel = {
+        devCenterEndpoint: 'https://test-devcenter.eastus.devcenter.azure.com',
+        projectName: 'test-project',
+        devBoxes: {
+          charrisdb5: {
+            tunnelHost: 'charrisdb5-ssh.usw3.devtunnels.ms',
+            sshUser: 'charris',
+            sshKeyPath: '/home/charris/.ssh/id_rsa'
+          }
+        }
+      }
+      const mgr = new DevBoxManager(configWithTunnel as any, mockCredential)
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ webUrl: 'https://x.com', rdpConnectionUrl: 'rdp://y' })
+      } as any)
+
+      const result = await mgr.getConnectionInfo('test-project', 'charrisdb5')
+      expect(result?.sshConfigured).toBe(true)
+      expect(result?.sshHost).toBe('charrisdb5-ssh.usw3.devtunnels.ms')
+      expect(result?.sshUser).toBe('charris')
+      expect(result?.sshKeyPath).toBe('/home/charris/.ssh/id_rsa')
+      mgr.dispose()
+    })
+
+    it('falls back to top-level tunnelHost when devBoxes map absent', async () => {
+      const configWithTopLevel = {
+        devCenterEndpoint: 'https://test-devcenter.eastus.devcenter.azure.com',
+        projectName: 'test-project',
+        tunnelHost: 'fallback.devtunnels.ms',
+        sshUser: 'fallbackuser'
+      }
+      const mgr = new DevBoxManager(configWithTopLevel as any, mockCredential)
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ webUrl: 'https://x.com' })
+      } as any)
+
+      const result = await mgr.getConnectionInfo('test-project', 'anybox')
+      expect(result?.sshConfigured).toBe(true)
+      expect(result?.sshHost).toBe('fallback.devtunnels.ms')
+      expect(result?.sshUser).toBe('fallbackuser')
+      mgr.dispose()
     })
 
     it('returns null when not configured', async () => {
@@ -205,6 +256,39 @@ describe('DevBoxManager', () => {
       const result = await unconfigured.getConnectionInfo('test-project', 'charrisdb5')
       expect(result).toBeNull()
       unconfigured.dispose()
+    })
+  })
+
+  // ============================================================================
+  // hasSshConfig
+  // ============================================================================
+
+  describe('hasSshConfig', () => {
+    it('returns false when no tunnel config', () => {
+      expect(manager.hasSshConfig('charrisdb5')).toBe(false)
+    })
+
+    it('returns true with per-devbox tunnelHost', () => {
+      const cfg = {
+        devCenterEndpoint: 'https://x.com',
+        projectName: 'p',
+        devBoxes: { mybox: { tunnelHost: 'host.devtunnels.ms', sshUser: 'u' } }
+      }
+      const mgr = new DevBoxManager(cfg as any, mockCredential)
+      expect(mgr.hasSshConfig('mybox')).toBe(true)
+      expect(mgr.hasSshConfig('otherbox')).toBe(false)
+      mgr.dispose()
+    })
+
+    it('returns true with top-level tunnelHost (legacy)', () => {
+      const cfg = {
+        devCenterEndpoint: 'https://x.com',
+        projectName: 'p',
+        tunnelHost: 'global.devtunnels.ms'
+      }
+      const mgr = new DevBoxManager(cfg as any, mockCredential)
+      expect(mgr.hasSshConfig('anybox')).toBe(true)
+      mgr.dispose()
     })
   })
 

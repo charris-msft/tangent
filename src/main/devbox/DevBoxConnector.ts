@@ -89,6 +89,16 @@ export class DevBoxConnector extends EventEmitter {
     this.connections.set(connectionId, connection)
 
     try {
+      // Preflight: check SSH tunnel config exists BEFORE starting Dev Box
+      if (!this.devBoxManager.hasSshConfig(devBoxName)) {
+        throw new Error(
+          `No SSH tunnel configured for Dev Box "${devBoxName}". ` +
+          'Run the setup script on your Dev Box via RDP to create a dev tunnel, ' +
+          'then add the tunnel host to ~/.tangent/devbox-config.json under devBoxes.' +
+          devBoxName
+        )
+      }
+
       // Step 1: Auto-start Dev Box
       this._updateState(connection, 'starting-devbox')
       this.emit('connection:starting', connectionId)
@@ -106,27 +116,22 @@ export class DevBoxConnector extends EventEmitter {
       }
 
       connection.connectionInfo = devBox.connectionInfo
-      console.log(`[Tangent 2] Dev Box ${devBoxName} connection info: webUrl=${devBox.connectionInfo.sshHost}`)
 
-      // Check if we have a usable SSH endpoint
-      // Dev Boxes expose RDP via Azure Virtual Desktop, not SSH directly.
-      // The sshHost field contains the webUrl — SSH requires the user to set up
-      // the Dev Box for SSH access (OpenSSH + network access via dev tunnel or VPN).
-      if (!devBox.connectionInfo.ipAddress || devBox.connectionInfo.ipAddress.startsWith('http')) {
+      if (!devBox.connectionInfo.sshConfigured) {
         throw new Error(
-          'Dev Box is running but no SSH endpoint available. ' +
-          'Dev Boxes use RDP by default. To enable SSH: ' +
-          '1) RDP into the Dev Box, 2) Enable OpenSSH server, ' +
-          '3) Set up a dev tunnel (devtunnel host -p 22) or configure VPN access, ' +
-          '4) Add the SSH host/IP to your agent profile remote config.'
+          `Dev Box "${devBoxName}" is running but no SSH tunnel is configured. ` +
+          'Run the setup script on your Dev Box, then add tunnelHost to devbox-config.json.'
         )
       }
 
-      // Step 2: Ensure OpenSSH is provisioned
+      console.log(`[Tangent 2] Dev Box ${devBoxName} SSH: ${devBox.connectionInfo.sshHost}:${devBox.connectionInfo.sshPort} as ${devBox.connectionInfo.sshUser}`)
+
+      // Step 2: Ensure OpenSSH is provisioned on the Dev Box
       this._updateState(connection, 'ensuring-ssh')
       this.emit('connection:provisioning', connectionId)
 
-      const sshClient = await this._createSshClient(devBox.connectionInfo, sshConfig?.keyPath)
+      const sshKeyPath = sshConfig?.keyPath ?? devBox.connectionInfo.sshKeyPath
+      const sshClient = await this._createSshClient(devBox.connectionInfo, sshKeyPath)
       const sshReady = await this.openSshProvisioner.ensureOpenSsh(sshClient)
       sshClient.end()
 
@@ -134,7 +139,7 @@ export class DevBoxConnector extends EventEmitter {
         throw new Error('Failed to provision OpenSSH on Dev Box')
       }
 
-      // Step 3: Establish SSH tunnel
+      // Step 3: Establish SSH tunnel (for ACP port forwarding)
       this._updateState(connection, 'tunneling')
       this.emit('connection:tunneling', connectionId)
 
@@ -144,7 +149,7 @@ export class DevBoxConnector extends EventEmitter {
         devBox.connectionInfo,
         localPort,
         remotePort,
-        sshConfig?.keyPath
+        sshKeyPath
       )
       connection.tunnelId = tunnelId
       connection.connectionInfo = devBox.connectionInfo
