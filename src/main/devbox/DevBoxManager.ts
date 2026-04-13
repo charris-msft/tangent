@@ -110,27 +110,48 @@ export class DevBoxManager extends EventEmitter {
   // REST helper
   // ---------------------------------------------------------------------------
 
-  private async request<T>(method: string, path: string): Promise<T> {
+  private async request<T>(method: string, path: string, retries = 2): Promise<T> {
     if (!this.config) throw new Error('DevBox not configured')
     const token = await this.getToken()
     const separator = path.includes('?') ? '&' : '?'
     const url = `${this.config.devCenterEndpoint}${path}${separator}api-version=${API_VERSION}`
-    const response = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        })
+        if (response.status === 504 || response.status === 503 || response.status === 429) {
+          if (attempt < retries) {
+            console.warn(`[Tangent] DevBox REST ${response.status}, retrying (${attempt + 1}/${retries})...`)
+            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+            continue
+          }
+        }
+        if (!response.ok) {
+          const body = await response.text().catch(() => '')
+          throw new Error(`REST ${method} ${path} failed: ${response.status} ${response.statusText} ${body}`)
+        }
+        // Actions (start/stop) return 202 with no body
+        if (response.status === 202 || response.status === 204) {
+          return undefined as unknown as T
+        }
+        return response.json() as Promise<T>
+      } catch (error) {
+        if (attempt < retries && error instanceof TypeError) {
+          // Network error — retry
+          console.warn(`[Tangent] DevBox REST network error, retrying (${attempt + 1}/${retries})...`)
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+          continue
+        }
+        throw error
       }
-    })
-    if (!response.ok) {
-      const body = await response.text().catch(() => '')
-      throw new Error(`REST ${method} ${path} failed: ${response.status} ${response.statusText} ${body}`)
     }
-    // Actions (start/stop) return 202 with no body
-    if (response.status === 202 || response.status === 204) {
-      return undefined as unknown as T
-    }
-    return response.json() as Promise<T>
+    throw new Error(`REST ${method} ${path} failed after ${retries} retries`)
   }
 
   // ---------------------------------------------------------------------------
@@ -191,7 +212,7 @@ export class DevBoxManager extends EventEmitter {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn('[Tangent] Failed to list dev boxes:', message)
-      return []
+      throw new Error(`Failed to list Dev Boxes: ${message}`)
     }
   }
 

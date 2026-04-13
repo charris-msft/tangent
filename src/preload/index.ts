@@ -88,7 +88,8 @@ const tangentAPI = {
     openInExplorer: (folderPath: string) => ipcRenderer.invoke('shell:openInExplorer', folderPath),
     openEditor: (folderPath: string) => ipcRenderer.invoke('shell:openEditor', { folderPath }),
     getEditor: () => ipcRenderer.invoke('shell:getEditor'),
-    setEditor: (editor: string) => ipcRenderer.invoke('shell:setEditor', { editor })
+    setEditor: (editor: string) => ipcRenderer.invoke('shell:setEditor', { editor }),
+    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url)
   },
 
   fs: {

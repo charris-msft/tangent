@@ -186,6 +186,10 @@ export function registerIpcHandlers(deps: {
     shell.openPath(folderPath)
   })
 
+  ipcMain.handle('shell:openExternal', (_, url: string) => {
+    shell.openExternal(url)
+  })
+
   ipcMain.handle('shell:openEditor', (_, { folderPath }: { folderPath: string }) => {
     const editor = configStore.getEditor()
     spawn(editor, [folderPath], { shell: true, detached: true, stdio: 'ignore' }).unref()
@@ -256,7 +260,8 @@ export function registerIpcHandlers(deps: {
 
   // --- DevBox ---
   ipcMain.handle('devbox:list', async () => {
-    if (!devBoxManager) return []
+    if (!devBoxManager) throw new Error('DevBox manager not available')
+    if (!devBoxManager.isConfigured) throw new Error('DevBox not configured. Create ~/.tangent/devbox-config.json with your Dev Center endpoint and project name.')
     return devBoxManager.listDevBoxes()
   })
 
