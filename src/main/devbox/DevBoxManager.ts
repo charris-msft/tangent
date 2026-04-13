@@ -38,8 +38,26 @@ export class DevBoxManager extends EventEmitter {
   // Will hold MCP client connection or direct SDK client when implemented
   private client: any = null
 
-  constructor() {
+  constructor(client?: any) {
     super()
+    if (client) {
+      // Injected client (for testing)
+      this.client = client
+    } else {
+      // Production: try to load MCP client
+      this.initializeClient()
+    }
+  }
+
+  private initializeClient(): void {
+    try {
+      // Dynamic import will be mocked in tests
+      const { DevBoxClient } = require('@microsoft/devbox-mcp')
+      this.client = new DevBoxClient()
+    } catch (error) {
+      // Silently fail if MCP package not available - tests will mock this
+      console.log('[Tangent 2] DevBox MCP client not available')
+    }
   }
 
   async initialize(): Promise<void> {
@@ -83,12 +101,14 @@ export class DevBoxManager extends EventEmitter {
     try {
       console.log(`[Tangent 2] Starting Dev Box: ${projectName}/${devBoxName} (not yet implemented)`)
       
-      // TODO: Call Dev Box API to start the box
-      // this.emit('devbox:state-changed', devBoxName, 'Starting')
-      // ... wait for completion ...
-      // this.emit('devbox:state-changed', devBoxName, 'Running')
+      if (!this.client) {
+        return false
+      }
+
+      const result = await this.client.startDevBox(projectName, devBoxName)
+      this.emit('devbox:state-changed', devBoxName, 'Starting')
       
-      return false // Not implemented
+      return result !== null && result !== undefined
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Tangent 2] Failed to start Dev Box ${devBoxName}:`, message)
@@ -270,10 +290,14 @@ export class DevBoxManager extends EventEmitter {
     devBoxName: string
   ): Promise<DevBoxResource | null> {
     try {
-      // TODO: Call MCP to get current Dev Box details
-      // For now, this is a placeholder that would be implemented alongside other MCP methods
       console.log(`[Tangent 2] Getting Dev Box details for ${projectName}/${devBoxName} (not yet implemented)`)
-      return null // Placeholder
+      
+      if (!this.client) {
+        return null
+      }
+
+      const result = await this.client.getDevBox(projectName, devBoxName)
+      return result || null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Tangent 2] Failed to get Dev Box details:`, message)

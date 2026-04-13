@@ -10,7 +10,7 @@ const mockGetDevBox = vi.fn()
 const mockGetConnectionInfo = vi.fn()
 
 vi.mock('@microsoft/devbox-mcp', () => ({
-  DevBoxClient: vi.fn(function() {
+  DevBoxClient: function() {
     return {
       listProjects: mockListProjects,
       listDevBoxes: mockListDevBoxes,
@@ -19,7 +19,7 @@ vi.mock('@microsoft/devbox-mcp', () => ({
       getDevBox: mockGetDevBox,
       getConnectionInfo: mockGetConnectionInfo,
     }
-  })
+  }
 }))
 
 // Mock ssh2 for health checks
@@ -28,13 +28,13 @@ const mockSshEnd = vi.fn()
 const mockSshOn = vi.fn()
 
 vi.mock('ssh2', () => ({
-  Client: vi.fn(function() {
+  Client: function() {
     return {
       connect: mockSshConnect,
       end: mockSshEnd,
       on: mockSshOn,
     }
-  })
+  }
 }))
 
 // === Imports after mocks ===
@@ -42,10 +42,23 @@ import { DevBoxManager } from '../DevBoxManager'
 
 describe('DevBoxManager', () => {
   let manager: DevBoxManager
+  let mockClient: any
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks()
-    manager = new DevBoxManager()
+    
+    // Create a mock client instance to inject
+    mockClient = {
+      listProjects: mockListProjects,
+      listDevBoxes: mockListDevBoxes,
+      startDevBox: mockStartDevBox,
+      stopDevBox: mockStopDevBox,
+      getDevBox: mockGetDevBox,
+      getConnectionInfo: mockGetConnectionInfo,
+    }
+    
+    // Inject the mock client directly
+    manager = new DevBoxManager(mockClient)
   })
 
   afterEach(() => {
@@ -242,11 +255,13 @@ describe('DevBoxManager', () => {
       })
 
       const promise = manager.autoStart('project-1', 'charrisdb5')
+      const caught = promise.catch(() => {})
 
       // Advance past 5 minute timeout
       await vi.advanceTimersByTimeAsync(6 * 60 * 1000)
 
       await expect(promise).rejects.toThrow(/timeout/i)
+      await caught
       vi.useRealTimers()
     })
 
@@ -297,11 +312,14 @@ describe('DevBoxManager', () => {
       })
 
       const promise = manager.autoStart('project-1', 'charrisdb5')
+      // Attach catch handler immediately to prevent unhandled rejection
+      const caught = promise.catch(() => {})
 
       // Advance one polling interval
       await vi.advanceTimersByTimeAsync(5000)
 
       await expect(promise).rejects.toThrow(/Failed state/i)
+      await caught
       vi.useRealTimers()
     })
 

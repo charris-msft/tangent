@@ -4,8 +4,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import { spawn } from 'child_process'
 import { DevBoxSyncConfig } from '../../shared/devbox-types'
-
-const nodeRsync = require('node-rsync')
+import * as nodeRsync from 'node-rsync'
 
 // === Constants ===
 

@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { RsyncManager, ConflictingFile } from '../RsyncManager'
 import { spawn } from 'child_process'
 import { EventEmitter } from 'events'
 
-// Mock node-rsync module
-const mockExecute = vi.fn()
+// Use vi.hoisted to ensure mockExecute is available in the mock factory
+const { mockExecute } = vi.hoisted(() => {
+  return {
+    mockExecute: vi.fn()
+  }
+})
+
+// Mock node-rsync module - it exports { execute: function }
 vi.mock('node-rsync', () => ({
-  default: {
-    execute: mockExecute
-  },
   execute: mockExecute
 }))
 
@@ -16,6 +18,9 @@ vi.mock('node-rsync', () => ({
 vi.mock('child_process', () => ({
   spawn: vi.fn()
 }))
+
+// Import after mocks are defined
+import { RsyncManager, ConflictingFile } from '../RsyncManager'
 
 describe('RsyncManager', () => {
   let manager: RsyncManager
@@ -25,8 +30,8 @@ describe('RsyncManager', () => {
   const testSshUser = 'azureuser'
 
   beforeEach(() => {
-    manager = new RsyncManager()
     vi.clearAllMocks()
+    manager = new RsyncManager()
   })
 
   afterEach(() => {
@@ -142,7 +147,11 @@ describe('RsyncManager', () => {
   describe('syncInbound', () => {
     it('should sync remote to local successfully', async () => {
       mockExecute.mockImplementation((params: any, callback: Function) => {
-        const stdout = 'remote1.txt\nremote2.txt\nsent 2,345 bytes  received 678 bytes'
+        // Realistic rsync output with file sizes
+        const stdout = `remote1.txt 1024 100%
+remote2.txt 2048 100%
+ 
+  sent 2,345 bytes  received 678 bytes`
         callback(stdout)
       })
 
@@ -215,11 +224,12 @@ describe('RsyncManager', () => {
 
   describe('parseRsyncOutput', () => {
     it('should parse file count and bytes from output', async () => {
-      const mockOutput = `file1.txt
-file2.js
-file3.css
-sent 5,678 bytes  received 1,234 bytes  1,382.40 bytes/sec
-total size is 45,678  speedup is 6.61`
+      const mockOutput = `file1.txt 512 100%
+file2.js 1024 100%
+file3.css 2048 100%
+ 
+  sent 5,678 bytes  received 1,234 bytes  1,382.40 bytes/sec
+  total size is 45,678  speedup is 6.61`
 
       mockExecute.mockImplementation((params: any, callback: Function) => {
         callback(mockOutput)

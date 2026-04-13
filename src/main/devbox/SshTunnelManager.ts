@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { readFileSync } from 'fs'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - ssh2 has no type definitions
 import { Client } from 'ssh2'
@@ -183,7 +184,7 @@ export class SshTunnelManager extends EventEmitter {
       host: config.host,
       port: config.sshPort,
       username: config.sshUser,
-      privateKey: config.sshKeyPath ? require('fs').readFileSync(config.sshKeyPath) : undefined,
+      privateKey: config.sshKeyPath ? readFileSync(config.sshKeyPath) : undefined,
       readyTimeout: 30000
     })
   }
