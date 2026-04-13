@@ -2,6 +2,7 @@ import { createServer, type Server, type Socket } from 'net'
 import { platform } from 'os'
 import { unlinkSync } from 'fs'
 import { v4 as uuid } from 'uuid'
+import type { BrowserWindow } from 'electron'
 import type { ConfigStore } from './ConfigStore'
 import type { AgentStore } from '../agents/AgentStore'
 import type { AgentProfile } from '@shared/types'
@@ -21,14 +22,33 @@ interface RpcResponse {
   error?: string
 }
 
+/** Strip emoji and variation selectors so "🏗️Demos" normalises to "Demos". */
+function stripEmoji(s: string): string {
+  return s.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').trim()
+}
+
+/** Find a folder by exact name first, then by emoji-stripped case-insensitive match. */
+function findFolder<T extends { name: string }>(folders: T[], name: string): T | undefined {
+  const exact = folders.find((f) => f.name === name)
+  if (exact) return exact
+  const stripped = stripEmoji(name).toLowerCase()
+  return folders.find((f) => stripEmoji(f.name).toLowerCase() === stripped)
+}
+
 export class PipeServer {
   private server: Server | null = null
   private readonly configStore: ConfigStore
   private readonly agentStore: AgentStore
+  private readonly getWindow: () => BrowserWindow | null
 
-  constructor(configStore: ConfigStore, agentStore: AgentStore) {
+  constructor(
+    configStore: ConfigStore,
+    agentStore: AgentStore,
+    getWindow: () => BrowserWindow | null
+  ) {
     this.configStore = configStore
     this.agentStore = agentStore
+    this.getWindow = getWindow
   }
 
   start(): void {
@@ -118,7 +138,7 @@ export class PipeServer {
           return { error: 'Missing "folder", "agent.name", or "agent.command" param' }
         }
         const folders = this.agentStore.getGroups()
-        const folder = folders.find((f) => f.name === folderName)
+        const folder = findFolder(folders, folderName)
         if (!folder) {
           return { error: `Folder "${folderName}" not found` }
         }
@@ -131,7 +151,9 @@ export class PipeServer {
           launchTarget: agentData.launchTarget ?? 'currentTab'
         }
         folder.agents.push(newAgent)
-        this.agentStore.save(folders).catch((err) => {
+        this.agentStore.save(folders).then(() => {
+          this.notifyRenderer(folders)
+        }).catch((err) => {
           console.warn('[PipeServer] Failed to save agents:', err)
         })
         return { result: 'ok' }
@@ -157,7 +179,9 @@ export class PipeServer {
           }
         }
         if (!found) return { error: `Agent "${agentName}" not found` }
-        this.agentStore.save(allFolders).catch((err) => {
+        this.agentStore.save(allFolders).then(() => {
+          this.notifyRenderer(allFolders)
+        }).catch((err) => {
           console.warn('[PipeServer] Failed to save agents:', err)
         })
         return { result: 'ok' }
@@ -177,7 +201,9 @@ export class PipeServer {
           }
         }
         if (!removed) return { error: `Agent "${removeName}" not found` }
-        this.agentStore.save(groups).catch((err) => {
+        this.agentStore.save(groups).then(() => {
+          this.notifyRenderer(groups)
+        }).catch((err) => {
           console.warn('[PipeServer] Failed to save agents:', err)
         })
         return { result: 'ok' }
@@ -200,7 +226,9 @@ export class PipeServer {
           return { error: `Project "${projName}" already exists` }
         }
         projFolders.push({ id: uuid(), name: projName, agents: [] })
-        this.agentStore.save(projFolders).catch((err) => {
+        this.agentStore.save(projFolders).then(() => {
+          this.notifyRenderer(projFolders)
+        }).catch((err) => {
           console.warn('[PipeServer] Failed to save agents:', err)
         })
         return { result: 'ok' }
@@ -210,10 +238,13 @@ export class PipeServer {
         const projRemoveName = request.params?.name as string | undefined
         if (!projRemoveName) return { error: 'Missing "name" param' }
         const projRemFolders = this.agentStore.getGroups()
-        const projIdx = projRemFolders.findIndex((f) => f.name === projRemoveName)
-        if (projIdx === -1) return { error: `Project "${projRemoveName}" not found` }
+        const projToRemove = findFolder(projRemFolders, projRemoveName)
+        if (!projToRemove) return { error: `Project "${projRemoveName}" not found` }
+        const projIdx = projRemFolders.indexOf(projToRemove)
         projRemFolders.splice(projIdx, 1)
-        this.agentStore.save(projRemFolders).catch((err) => {
+        this.agentStore.save(projRemFolders).then(() => {
+          this.notifyRenderer(projRemFolders)
+        }).catch((err) => {
           console.warn('[PipeServer] Failed to save agents:', err)
         })
         return { result: 'ok' }
@@ -224,13 +255,15 @@ export class PipeServer {
         const newName = request.params?.newName as string | undefined
         if (!oldName || !newName) return { error: 'Missing "oldName" or "newName" param' }
         const renameFolders = this.agentStore.getGroups()
-        const target = renameFolders.find((f) => f.name === oldName)
+        const target = findFolder(renameFolders, oldName)
         if (!target) return { error: `Project "${oldName}" not found` }
         if (renameFolders.find((f) => f.name === newName)) {
           return { error: `Project "${newName}" already exists` }
         }
         target.name = newName
-        this.agentStore.save(renameFolders).catch((err) => {
+        this.agentStore.save(renameFolders).then(() => {
+          this.notifyRenderer(renameFolders)
+        }).catch((err) => {
           console.warn('[PipeServer] Failed to save agents:', err)
         })
         return { result: 'ok' }
@@ -249,7 +282,9 @@ export class PipeServer {
           this.configStore.save(bundle.config)
         }
         if (bundle.agents && Array.isArray(bundle.agents)) {
-          this.agentStore.save(bundle.agents).catch((err) => {
+          this.agentStore.save(bundle.agents).then(() => {
+            this.notifyRenderer(bundle.agents)
+          }).catch((err) => {
             console.warn('[PipeServer] Failed to save agents:', err)
           })
         }
@@ -267,5 +302,9 @@ export class PipeServer {
     } catch {
       // socket may be closed
     }
+  }
+
+  private notifyRenderer(groups: unknown): void {
+    this.getWindow()?.webContents.send('agents:updated', groups)
   }
 }

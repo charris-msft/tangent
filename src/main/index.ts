@@ -28,7 +28,11 @@ const sdkSessionManager = new SdkSessionManager(sessionStore, ptyManager)
 sessionManager.setSdkManager(sdkSessionManager)
 const agentStore = new AgentStore()
 const agentLauncher = new AgentLauncher(ptyManager, sessionStore, sessionManager)
-const pipeServer = new PipeServer(configStore, agentStore)
+const pipeServer = new PipeServer(
+  configStore,
+  agentStore,
+  () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+)
 
 /** Persist restorable sessions to disk immediately. Called on every session change. */
 function persistSessions(): void {
