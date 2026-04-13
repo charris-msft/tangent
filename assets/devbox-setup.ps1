@@ -32,12 +32,13 @@
 #>
 
 param(
-    [string]$TunnelName = "$($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]', '')-ssh"
+    [string]$TunnelName = "$($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]', '')-ssh",
+    [string]$AuthorizedKey = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $stepNumber = 0
-$totalSteps = 6
+$totalSteps = 7
 
 # Validate tunnel name meets devtunnel requirements: [a-z0-9][a-z0-9-]{1,58}[a-z0-9]
 if ($TunnelName -cnotmatch '^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$') {
@@ -176,7 +177,89 @@ $sw.Stop()
 Write-Elapsed $sw
 
 # ---------------------------------------------------------------------------
-# Step 2: devtunnel CLI
+# Step 2: SSH Authentication (password + authorized keys)
+# ---------------------------------------------------------------------------
+Write-Step "Configuring SSH authentication"
+
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+$sshdConfigPath = "$env:ProgramData\ssh\sshd_config"
+if (Test-Path $sshdConfigPath) {
+    # Enable password authentication (needed for first-time connections)
+    Write-Detail "Enabling password authentication in sshd_config..."
+    $config = Get-Content $sshdConfigPath -Raw
+    $modified = $false
+
+    if ($config -match '#?\s*PasswordAuthentication\s+no') {
+        $config = $config -replace '#?\s*PasswordAuthentication\s+no', 'PasswordAuthentication yes'
+        $modified = $true
+    } elseif ($config -notmatch 'PasswordAuthentication\s+yes') {
+        $config += "`nPasswordAuthentication yes`n"
+        $modified = $true
+    }
+
+    if ($modified) {
+        Set-Content $sshdConfigPath $config -Encoding utf8
+        Restart-Service sshd
+        Write-Success "Password authentication enabled and sshd restarted"
+    } else {
+        Write-Success "Password authentication already enabled"
+    }
+} else {
+    Write-Warn "sshd_config not found at $sshdConfigPath — skipping"
+}
+
+# Set up authorized_keys for key-based auth
+$sshDir = "$env:USERPROFILE\.ssh"
+$authKeysPath = "$sshDir\authorized_keys"
+$adminAuthKeysPath = "$env:ProgramData\ssh\administrators_authorized_keys"
+
+if (-not (Test-Path $sshDir)) {
+    New-Item -Path $sshDir -ItemType Directory -Force | Out-Null
+    Write-Detail "Created $sshDir"
+}
+
+if ($AuthorizedKey) {
+    Write-Detail "Adding provided public key to authorized_keys..."
+    
+    # For admin users, Windows OpenSSH uses administrators_authorized_keys
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    if ($isAdmin) {
+        if (-not (Test-Path $adminAuthKeysPath) -or (Get-Content $adminAuthKeysPath -ErrorAction SilentlyContinue) -notcontains $AuthorizedKey) {
+            Add-Content $adminAuthKeysPath $AuthorizedKey
+            # Fix permissions: only Admins and SYSTEM should have access
+            icacls $adminAuthKeysPath /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F" 2>&1 | Out-Null
+            Write-Success "Added key to $adminAuthKeysPath"
+        } else {
+            Write-Success "Key already in $adminAuthKeysPath"
+        }
+    }
+    
+    # Also add to user's authorized_keys as fallback
+    if (-not (Test-Path $authKeysPath) -or (Get-Content $authKeysPath -ErrorAction SilentlyContinue) -notcontains $AuthorizedKey) {
+        Add-Content $authKeysPath $AuthorizedKey
+        Write-Success "Added key to $authKeysPath"
+    } else {
+        Write-Success "Key already in $authKeysPath"
+    }
+} else {
+    Write-Detail "No -AuthorizedKey provided. You can add keys later:"
+    Write-Detail "  .\devbox-setup.ps1 -AuthorizedKey 'ssh-rsa AAAA...'"
+    Write-Detail "  Or copy your public key to $authKeysPath on this machine"
+    if (Test-Path $authKeysPath) {
+        $keyCount = (Get-Content $authKeysPath | Where-Object { $_ -match '^ssh-' }).Count
+        Write-Success "authorized_keys exists ($keyCount keys)"
+    } else {
+        Write-Warn "No authorized_keys file — password auth will be used"
+    }
+}
+
+$sw.Stop()
+Write-Elapsed $sw
+
+# ---------------------------------------------------------------------------
+# Step 3: devtunnel CLI
 # ---------------------------------------------------------------------------
 Write-Step "Installing devtunnel CLI"
 
@@ -282,6 +365,10 @@ if ($portResult -match 'already exists') {
 } else {
     Write-Success "Port 22 configured on tunnel"
 }
+
+Write-Detail "Granting tenant access for cross-machine connectivity..."
+& devtunnel access create $TunnelName --tenant 2>&1 | Out-Null
+Write-Success "Tenant access granted (same org users can connect)"
 
 $sw.Stop()
 Write-Elapsed $sw
