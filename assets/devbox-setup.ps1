@@ -32,12 +32,23 @@
 #>
 
 param(
-    [string]$TunnelName = "$($env:COMPUTERNAME)-ssh"
+    [string]$TunnelName = "$($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]', '')-ssh"
 )
 
 $ErrorActionPreference = 'Stop'
 $stepNumber = 0
 $totalSteps = 6
+
+# Validate tunnel name meets devtunnel requirements: [a-z0-9][a-z0-9-]{1,58}[a-z0-9]
+if ($TunnelName -cnotmatch '^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$') {
+    Write-Host "⚠ Tunnel name '$TunnelName' doesn't meet devtunnel requirements." -ForegroundColor Yellow
+    Write-Host "  Must be lowercase alphanumeric + hyphens, 3-60 chars, no leading/trailing hyphens." -ForegroundColor Yellow
+    # Auto-fix: lowercase, strip invalid chars, trim hyphens
+    $TunnelName = ($TunnelName.ToLower() -replace '[^a-z0-9-]', '' -replace '^-+', '' -replace '-+$', '')
+    if ($TunnelName.Length -lt 3) { $TunnelName = "devbox-ssh" }
+    if ($TunnelName.Length -gt 60) { $TunnelName = $TunnelName.Substring(0, 60) -replace '-+$', '' }
+    Write-Host "  Auto-corrected to: '$TunnelName'" -ForegroundColor Green
+}
 
 function Write-Banner {
     Write-Host ""
