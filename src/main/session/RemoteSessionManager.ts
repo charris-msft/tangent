@@ -8,6 +8,7 @@ import type { PtyManager } from '../pty/PtyManager'
 import type { AgentStore } from '../agents/AgentStore'
 import type { AgentProfile, RemoteSessionState } from '@shared/types'
 import type { AcpSessionConfig } from '@shared/acp-types'
+import { REMOTE_PORTS } from '@shared/constants'
 import { v4 as uuid } from 'uuid'
 
 interface RemoteSessionHandle {
@@ -207,7 +208,7 @@ export class RemoteSessionManager extends EventEmitter {
       console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
 
       const connInfo = connectionStatus.connectionInfo
-      const acpLocalPort = 7777 // Default local port from SshTunnelManager
+      const acpLocalPort = REMOTE_PORTS.ACP_LOCAL
       await this.acpClient.connect({
         host: connInfo?.sshHost ?? '127.0.0.1',
         port: connInfo?.sshPort ?? 22,

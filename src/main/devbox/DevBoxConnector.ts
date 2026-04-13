@@ -4,6 +4,7 @@ import type { SshTunnelManager } from './SshTunnelManager'
 import type { OpenSshProvisioner } from './OpenSshProvisioner'
 import type { RsyncManager } from './RsyncManager'
 import type { DevBoxConnectionInfo, DevBoxProvisioningState } from '@shared/devbox-types'
+import { REMOTE_PORTS } from '@shared/constants'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore - ssh2 has no type definitions
 import type { Client } from 'ssh2'
@@ -140,11 +141,12 @@ export class DevBoxConnector extends EventEmitter {
       }
 
       // Step 3: Establish SSH tunnel (for ACP port forwarding)
+      // Forward local ACP_LOCAL port to remote ACP_REMOTE port over SSH
       this._updateState(connection, 'tunneling')
       this.emit('connection:tunneling', connectionId)
 
-      const localPort = sshConfig?.localPort || 7777
-      const remotePort = sshConfig?.remotePort || 7777
+      const localPort = sshConfig?.localPort || REMOTE_PORTS.ACP_LOCAL
+      const remotePort = sshConfig?.remotePort || devBox.connectionInfo.acpPort || REMOTE_PORTS.ACP_REMOTE
       const tunnelId = this.sshTunnelManager.createTunnel(
         devBox.connectionInfo,
         localPort,

@@ -34,5 +34,12 @@ export const ZOOM = {
   DEFAULT: 14,
   MIN: 8,
   MAX: 32,
-  STEP: 2
+} as const
+
+// Remote Dev Box / ACP port configuration
+export const REMOTE_PORTS = {
+  /** Port ACP server listens on inside the Dev Box (remote side of SSH tunnel). */
+  ACP_REMOTE: 3000,
+  /** Local port that forwards to the remote ACP port via SSH tunnel. */
+  ACP_LOCAL: 7777
 } as const
