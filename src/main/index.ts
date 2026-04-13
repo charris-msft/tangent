@@ -13,6 +13,16 @@ import { AgentLauncher } from './agents/AgentLauncher'
 import { ConfigStore } from './config/ConfigStore'
 import { registerIpcHandlers } from './ipc/handlers'
 import { PipeServer } from './config/PipeServer'
+import { DevBoxManager } from './devbox/DevBoxManager'
+import { SshTunnelManager } from './devbox/SshTunnelManager'
+import { OpenSshProvisioner } from './devbox/OpenSshProvisioner'
+import { AcpProvisioner } from './devbox/AcpProvisioner'
+import { DevBoxConnector } from './devbox/DevBoxConnector'
+import { DevBoxProvisioner } from './devbox/DevBoxProvisioner'
+import { AcpClient } from './devbox/AcpClient'
+import { RsyncManager } from './devbox/RsyncManager'
+import { SyncListener } from './devbox/SyncListener'
+import { RemoteSessionManager } from './session/RemoteSessionManager'
 
 const SESSIONS_PATH = join(homedir(), '.tangent-2', 'sessions.json')
 
@@ -27,12 +37,26 @@ sessionManager.setContextStore(contextStore)
 const sdkSessionManager = new SdkSessionManager(sessionStore, ptyManager)
 sessionManager.setSdkManager(sdkSessionManager)
 const agentStore = new AgentStore()
-const agentLauncher = new AgentLauncher(ptyManager, sessionStore, sessionManager)
 const pipeServer = new PipeServer(
   configStore,
   agentStore,
   () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
 )
+
+// Remote execution managers
+const devBoxManager = new DevBoxManager()
+const sshTunnelManager = new SshTunnelManager()
+const openSshProvisioner = new OpenSshProvisioner()
+const acpProvisioner = new AcpProvisioner()
+const devBoxConnector = new DevBoxConnector(devBoxManager, sshTunnelManager, openSshProvisioner)
+const devBoxProvisioner = new DevBoxProvisioner(openSshProvisioner, acpProvisioner)
+const acpClient = new AcpClient()
+const rsyncManager = new RsyncManager()
+const syncListener = new SyncListener(rsyncManager)
+const remoteSessionManager = new RemoteSessionManager(
+  devBoxConnector, devBoxProvisioner, acpClient, rsyncManager, sessionStore, ptyManager, agentStore
+)
+const agentLauncher = new AgentLauncher(ptyManager, sessionStore, sessionManager, remoteSessionManager)
 
 /** Persist restorable sessions to disk immediately. Called on every session change. */
 function persistSessions(): void {
@@ -150,6 +174,8 @@ function createWindow(): void {
     agentStore,
     agentLauncher,
     configStore,
+    devBoxManager,
+    acpClient,
     getWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   })
 
@@ -176,6 +202,53 @@ app.whenReady().then(async () => {
   await agentStore.load()
   pipeServer.start()
   createWindow()
+
+  // Forward remote execution events to renderer
+  const getWin = (): BrowserWindow | null =>
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+
+  remoteSessionManager.on('remote:state-changed', (sessionId: string, state: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('remote:state-changed', sessionId, state)
+  })
+  remoteSessionManager.on('remote:message', (sessionId: string, text: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('remote:message', sessionId, text)
+  })
+  remoteSessionManager.on('remote:error', (sessionId: string, error: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('remote:error', sessionId, error)
+  })
+
+  devBoxConnector.on('connection:ready', (connectionId: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('devbox:connection-ready', connectionId)
+  })
+  devBoxConnector.on('connection:failed', (connectionId: string, error: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('devbox:connection-failed', connectionId, error)
+  })
+  devBoxConnector.on('connection:disconnected', (connectionId: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('devbox:connection-disconnected', connectionId)
+  })
+
+  syncListener.on('sync:incoming', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:incoming', data)
+  })
+  syncListener.on('sync:complete', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:complete', data)
+  })
+  syncListener.on('sync:error', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:error', data)
+  })
+  syncListener.on('sync:conflict', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:conflict', data)
+  })
 
   // Restore saved sessions or create a fresh one
   let restored = false
@@ -336,6 +409,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   persistNow()
+  syncListener.dispose()
 })
 
 app.on('window-all-closed', () => {

@@ -1087,3 +1087,27 @@ Extended `src/main/session/RemoteSessionManager.ts` with connection failure reco
 - RemoteSessionManager listens to DevBoxConnector connection events
 - RemoteSessionHandle tracks reconnectionAttempts counter
 - Ready for main process wiring (pass RemoteSessionManager to AgentLauncher constructor)
+
+### 2026-04-13: Final Integration Wiring (index.ts)
+
+Wired all remote execution managers into `src/main/index.ts` — the final integration step:
+
+**Imports Added:** DevBoxManager, SshTunnelManager, OpenSshProvisioner, AcpProvisioner, DevBoxConnector, DevBoxProvisioner, AcpClient, RsyncManager, SyncListener, RemoteSessionManager
+
+**Instantiation Order (dependency-aware):**
+1. Leaf managers first: DevBoxManager(), SshTunnelManager(), OpenSshProvisioner(), AcpProvisioner(), AcpClient(), RsyncManager()
+2. Composite managers: DevBoxConnector(devBoxManager, sshTunnelManager, openSshProvisioner), DevBoxProvisioner(openSshProvisioner, acpProvisioner), SyncListener(rsyncManager)
+3. RemoteSessionManager(devBoxConnector, devBoxProvisioner, acpClient, rsyncManager, sessionStore, ptyManager, agentStore)
+4. AgentLauncher now receives remoteSessionManager as 4th param (P4.6 constructor)
+
+**IPC Handler Wiring:** devBoxManager and acpClient passed to registerIpcHandlers (were previously undefined)
+
+**Event Forwarding (after createWindow):**
+- RemoteSessionManager: remote:state-changed, remote:message, remote:error → renderer
+- DevBoxConnector: connection:ready, connection:failed, connection:disconnected → renderer
+- SyncListener: sync:incoming, sync:complete, sync:error, sync:conflict → renderer
+- Uses getWin() helper for safe BrowserWindow access
+
+**Cleanup:** syncListener.dispose() added to before-quit handler
+
+**Key Pattern:** Constructor signatures verified from source — no guessing. DevBoxConnector accepts optional rsyncManager (not passed here since SyncListener owns that relationship).
