@@ -35,6 +35,29 @@
 
 **Why:** Provides concrete work scope, dependency sequencing, and architectural commitments for 9–11 week Plan A implementation.
 
+### 2026-04-13: ACP SDK API Surface
+**By:** Rusty  
+**Status:** ✅ Accepted  
+**Tags:** #acp #sdk #api
+
+**What:** Exploration of `@agentclientprotocol/sdk` v0.18.2 reveals API surface for ClientSideConnection, AgentSideConnection, Stream, and Client interface patterns.
+
+**Key Decisions:**
+- Use `ClientSideConnection` for Tangent's Dev Box ACP client
+- Implement minimal required `Client` interface (requestPermission, sessionUpdate)
+- Defer stream creation to DevBoxManager (SSH tunnel + stdio bridge)
+- Use `unstable_resumeSession` with fallback to `loadSession`
+- Use `unstable_closeSession` if available during disconnect
+
+**Rationale:** Tangent is a CLIENT connecting to remote ACP agents (not an agent itself). Minimal Client interface reduces complexity. Stream creation separated from AcpClient allows flexible transport.
+
+**Impact:** 
+- AcpClient wraps ClientSideConnection, maps Tangent sessions ↔ ACP sessions
+- DevBoxManager responsible for creating Stream (SSH tunnel + stdio bridge)
+- Future incremental expansion of Client capabilities as needed
+
+**See:** Full discovery details in implementation PR, SDK Docs at https://agentclientprotocol.github.io/typescript-sdk
+
 ## Governance
 
 - All meaningful changes require team consensus

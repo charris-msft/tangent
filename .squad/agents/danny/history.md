@@ -100,3 +100,33 @@
 - `src/main/session/SessionStore.ts` — track `remoteState` for remote sessions
 - New main process managers: DevBoxManager, SshTunnelManager, RsyncManager, AcpClient, RemoteSessionManager, DevBoxProvisioner
 - New UI components: DevBoxPicker, DevBoxStatus, ProvisioningConsentDialog, ConnectionLostDialog, SyncLogModal
+
+### 2025-06-01 — TypeScript Type Definitions for Remote Execution (P1.2 + P2.2)
+
+**Created: `src/shared/devbox-types.ts`**
+- `DevBoxResource` — Dev Box entity with state, connection info, health status
+- `DevBoxProject` — project container grouping Dev Boxes
+- `DevBoxConnectionInfo` — SSH and ACP connection details (IP, host, ports)
+- `DevBoxProvisioningState` — enum matching Azure Dev Center API states
+- `DevBoxHealthStatus` — connection validation results
+- `DevBoxConfig` — user config stored in agent profile
+- `DevBoxProvisioningConsent` — tracks first-time setup consent
+- `DevBoxSyncConfig` — workspace sync exclusion patterns
+
+**Created: `src/shared/acp-types.ts`**
+- `AcpSession` — active ACP session with state and metrics
+- `AcpSessionConfig` — workspace context for remote sessions (cwd, env, MCP servers)
+- `AcpPermissionRequest/Response` — permission callback protocol
+- `AcpAgentResponse` — structured agent output (text, tools, status)
+- `AcpToolExecution` — remote tool execution records
+- `AcpConnectionState` — enum for tunnel/protocol lifecycle
+- `AcpMessage` — base protocol message type
+- `AcpEvent` — union of all server-to-client events
+- `AcpConnectionOptions` — SSH tunnel configuration
+
+**Design Patterns Applied**
+- Followed existing conventions from `types.ts`: interface over type aliases, JSDoc comments, explicit exports
+- Enum-as-union pattern for state types (matches `SessionStatus`, `AgentType`)
+- Separated concerns: DevBox infrastructure vs. ACP protocol
+- Optional fields for progressive enhancement (e.g., `healthStatus`, `acpPort`)
+- Trade-off: Comprehensive types for IDE autocomplete vs. future flexibility (chose comprehensive — easier to extend than restrict)
