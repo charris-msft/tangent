@@ -1111,3 +1111,24 @@ Wired all remote execution managers into `src/main/index.ts` — the final integ
 **Cleanup:** syncListener.dispose() added to before-quit handler
 
 **Key Pattern:** Constructor signatures verified from source — no guessing. DevBoxConnector accepts optional rsyncManager (not passed here since SyncListener owns that relationship).
+---
+
+## DevBoxManager REST API Rewrite — 2026-04-13
+
+**Task:** Replace stub DevBoxManager with real Azure Dev Center REST API calls.
+
+**What changed:**
+- `DevBoxManager.ts`: Replaced `@microsoft/devbox-mcp` client stubs with direct REST API calls using `@azure/identity` `DefaultAzureCredential` + native `fetch`
+- Config: reads `~/.tangent/devbox-config.json` (devCenterEndpoint + projectName) on construction
+- Auth: `DefaultAzureCredential` with scope `https://devcenter.azure.com/.default` — works with az login, env vars, managed identity
+- REST: data-plane api-version=2024-02-01 — list, get, start, stop, remoteConnection endpoints
+- `getDevBox()` promoted from private to public (needed for health checks + external callers)
+- `DevBoxPicker.tsx`: Empty state now says "Dev Box not configured. Create ~/.tangent/devbox-config.json..."
+- Tests: 18 tests passing — all `it.skip` stubs replaced with real REST-mocking tests using `vi.spyOn(globalThis, 'fetch')`
+- Constructor accepts optional `(config, credential)` for test injection — no more mock MCP client
+
+**Key decisions:**
+- No axios — uses Node.js built-in `fetch` (Electron/Node 18+)
+- graceful degradation: unconfigured manager returns empty arrays, never crashes
+- `mapPowerState()` maps both `powerState` and `provisioningState` to `DevBoxProvisioningState` enum
+- IPC handlers unchanged — same signatures, just real data now

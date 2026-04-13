@@ -111,7 +111,11 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
         {!loading && !error && devBoxes.length === 0 && (
           <div className="py-8 text-center">
             <p className="text-xs mb-3" style={{ color: 'var(--text-secondary)' }}>
-              No Dev Boxes found in your Azure account.
+              Dev Box not configured. Create{' '}
+              <code className="px-1 py-0.5 rounded" style={{ background: 'var(--bg-hover)', fontSize: '0.7rem' }}>
+                ~/.tangent/devbox-config.json
+              </code>{' '}
+              with your Dev Center endpoint and project name.
             </p>
             <a
               href="https://portal.azure.com/#view/Microsoft_Azure_DevCenter/DevBoxesMenuBlade/~/devBoxes"
@@ -120,7 +124,7 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
               className="text-xs underline"
               style={{ color: 'var(--accent)' }}
             >
-              Open Azure Portal to create one
+              Open Azure Portal to find your Dev Center
             </a>
           </div>
         )}

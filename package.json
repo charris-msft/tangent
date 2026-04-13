@@ -81,6 +81,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.18.2",
+    "@azure/identity": "^4.13.1",
     "@github/copilot-sdk": "file:../../tools/copilot-sdk/nodejs",
     "@microsoft/devbox-mcp": "^0.0.3-alpha.4",
     "@xterm/addon-fit": "^0.11.0",

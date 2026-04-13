@@ -1,4 +1,8 @@
 import { EventEmitter } from 'events'
+import { readFileSync, existsSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
+import { DefaultAzureCredential } from '@azure/identity'
 import type {
   DevBoxResource,
   DevBoxProvisioningState,
@@ -6,16 +10,14 @@ import type {
   DevBoxHealthStatus
 } from '../../shared/devbox-types'
 
-/**
- * NOTE: This implementation uses @microsoft/devbox-mcp package which bundles
- * the internal devcenter-internal-stable SDK. The public @azure/arm-devcenter
- * SDK is management plane only and doesn't support data plane operations like
- * listing user's Dev Boxes.
- * 
- * Future: Once Azure Dev Box data plane SDK is publicly available, migrate to it.
- * Current: This manager will need to spawn the MCP server as a child process
- * and communicate via JSON-RPC, or use the bundled SDK directly via dynamic import.
- */
+const API_VERSION = '2024-02-01'
+const TOKEN_SCOPE = 'https://devcenter.azure.com/.default'
+const CONFIG_PATH = join(homedir(), '.tangent', 'devbox-config.json')
+
+interface DevBoxConfig {
+  devCenterEndpoint: string
+  projectName: string
+}
 
 export interface DevBoxManagerEvents {
   'devbox:state-changed': (devBoxName: string, state: DevBoxProvisioningState) => void
@@ -34,162 +36,251 @@ export declare interface DevBoxManager {
   ): boolean
 }
 
+/**
+ * Manages Dev Boxes via Azure Dev Center data-plane REST API.
+ * Auth: @azure/identity DefaultAzureCredential (az login, env vars, managed identity).
+ * Config: ~/.tangent/devbox-config.json with devCenterEndpoint + projectName.
+ */
 export class DevBoxManager extends EventEmitter {
-  // Will hold MCP client connection or direct SDK client when implemented
-  private client: any = null
+  private config: DevBoxConfig | null = null
+  private credential: DefaultAzureCredential | null = null
+  private configError: string | null = null
 
-  constructor(client?: any) {
+  constructor(injectedConfig?: DevBoxConfig | null, injectedCredential?: DefaultAzureCredential | null) {
     super()
-    if (client) {
-      // Injected client (for testing)
-      this.client = client
+    if (injectedConfig !== undefined) {
+      // Test injection path
+      this.config = injectedConfig
+      this.credential = injectedCredential ?? null
     } else {
-      // Production: try to load MCP client
-      this.initializeClient()
+      this.loadConfig()
     }
   }
 
-  private initializeClient(): void {
+  private loadConfig(): void {
     try {
-      // Dynamic import will be mocked in tests
-      const { DevBoxClient } = require('@microsoft/devbox-mcp')
-      this.client = new DevBoxClient()
+      if (!existsSync(CONFIG_PATH)) {
+        this.configError = `Config file not found: ${CONFIG_PATH}`
+        console.log(`[Tangent] DevBox config not found at ${CONFIG_PATH}`)
+        return
+      }
+      const raw = readFileSync(CONFIG_PATH, 'utf-8')
+      const parsed = JSON.parse(raw)
+      if (!parsed.devCenterEndpoint || !parsed.projectName) {
+        this.configError = 'Config missing devCenterEndpoint or projectName'
+        console.warn('[Tangent] DevBox config missing required fields')
+        return
+      }
+      this.config = {
+        devCenterEndpoint: parsed.devCenterEndpoint.replace(/\/+$/, ''),
+        projectName: parsed.projectName
+      }
+      this.credential = new DefaultAzureCredential()
+      console.log(`[Tangent] DevBox configured: ${this.config.devCenterEndpoint} / ${this.config.projectName}`)
     } catch (error) {
-      // Silently fail if MCP package not available - tests will mock this
-      console.log('[Tangent 2] DevBox MCP client not available')
+      const message = error instanceof Error ? error.message : String(error)
+      this.configError = `Failed to load config: ${message}`
+      console.warn('[Tangent] Failed to load DevBox config:', message)
     }
   }
+
+  /** Whether the manager has a valid config loaded. */
+  get isConfigured(): boolean {
+    return this.config !== null && this.credential !== null
+  }
+
+  /** Human-readable reason config is missing (for UI). */
+  get configStatus(): string | null {
+    return this.configError
+  }
+
+  // ---------------------------------------------------------------------------
+  // Auth helper
+  // ---------------------------------------------------------------------------
+
+  private async getToken(): Promise<string> {
+    if (!this.credential) {
+      throw new Error('No Azure credential available')
+    }
+    const token = await this.credential.getToken(TOKEN_SCOPE)
+    return token.token
+  }
+
+  // ---------------------------------------------------------------------------
+  // REST helper
+  // ---------------------------------------------------------------------------
+
+  private async request<T>(method: string, path: string): Promise<T> {
+    if (!this.config) throw new Error('DevBox not configured')
+    const token = await this.getToken()
+    const separator = path.includes('?') ? '&' : '?'
+    const url = `${this.config.devCenterEndpoint}${path}${separator}api-version=${API_VERSION}`
+    const response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    })
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      throw new Error(`REST ${method} ${path} failed: ${response.status} ${response.statusText} ${body}`)
+    }
+    // Actions (start/stop) return 202 with no body
+    if (response.status === 202 || response.status === 204) {
+      return undefined as unknown as T
+    }
+    return response.json() as Promise<T>
+  }
+
+  // ---------------------------------------------------------------------------
+  // Map API response to DevBoxResource
+  // ---------------------------------------------------------------------------
+
+  private mapDevBox(raw: any): DevBoxResource {
+    return {
+      id: raw.uniqueId ?? raw.name ?? '',
+      name: raw.name ?? '',
+      projectName: this.config?.projectName ?? '',
+      poolName: raw.poolName ?? '',
+      state: this.mapPowerState(raw.powerState, raw.provisioningState),
+      osType: raw.osType === 'Linux' ? 'Linux' : 'Windows',
+      location: raw.location ?? '',
+      createdAt: raw.createdTime ? new Date(raw.createdTime).getTime() : undefined,
+      connectionInfo: undefined
+    }
+  }
+
+  private mapPowerState(powerState?: string, provisioningState?: string): DevBoxProvisioningState {
+    if (provisioningState === 'Creating') return 'Creating'
+    if (provisioningState === 'Deleting') return 'Deleting'
+    if (provisioningState === 'Failed') return 'Failed'
+    const ps = (powerState ?? '').toLowerCase()
+    if (ps === 'running') return 'Running'
+    if (ps === 'stopped' || ps === 'deallocated') return 'Stopped'
+    if (ps === 'starting') return 'Starting'
+    if (ps === 'stopping') return 'Stopping'
+    if (ps === 'hibernated') return 'Stopped'
+    return 'Stopped'
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
 
   async initialize(): Promise<void> {
-    try {
-      // TODO: Initialize connection to Dev Box service
-      // Option 1: Spawn @microsoft/devbox-mcp as child process and use JSON-RPC
-      // Option 2: Import bundled devcenter-internal-stable SDK directly
-      console.log('[Tangent 2] DevBoxManager initialized (placeholder)')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.warn('[Tangent 2] Failed to initialize DevBoxManager:', message)
+    if (!this.isConfigured) {
+      console.log('[Tangent] DevBoxManager not configured — skipping initialization')
+      return
     }
+    console.log('[Tangent] DevBoxManager initialized')
   }
 
   /**
-   * List all Dev Boxes across all projects for the current user.
-   * 
-   * TODO: Implement using Dev Box data plane SDK or MCP server communication.
-   * For now returns empty array as placeholder.
+   * List all Dev Boxes for the current user in the configured project.
+   * Returns empty array when not configured (does not crash).
    */
   async listDevBoxes(): Promise<DevBoxResource[]> {
+    if (!this.isConfigured) return []
     try {
-      // TODO: Call Dev Box API to list user's dev boxes
-      // Scope: /projects/*/users/me/devboxes/* (read)
-      console.log('[Tangent 2] listDevBoxes called (not yet implemented)')
-      return []
+      const data = await this.request<{ value: any[] }>(
+        'GET',
+        `/projects/${this.config!.projectName}/users/me/devboxes`
+      )
+      return (data.value ?? []).map((raw) => this.mapDevBox(raw))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn('[Tangent 2] Failed to list dev boxes:', message)
+      console.warn('[Tangent] Failed to list dev boxes:', message)
       return []
     }
   }
 
   /**
-   * Start a Dev Box.
-   * 
-   * TODO: Implement using Dev Box data plane SDK or MCP server.
-   * Scope: /projects/{projectName}/users/me/devboxes/{devBoxName} (action: start)
+   * Start a Dev Box. Returns true if the start was accepted.
    */
   async startDevBox(projectName: string, devBoxName: string): Promise<boolean> {
+    if (!this.isConfigured) return false
     try {
-      console.log(`[Tangent 2] Starting Dev Box: ${projectName}/${devBoxName} (not yet implemented)`)
-      
-      if (!this.client) {
-        return false
-      }
-
-      const result = await this.client.startDevBox(projectName, devBoxName)
+      await this.request<void>(
+        'POST',
+        `/projects/${projectName}/users/me/devboxes/${devBoxName}:start`
+      )
       this.emit('devbox:state-changed', devBoxName, 'Starting')
-      
-      return result !== null && result !== undefined
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Failed to start Dev Box ${devBoxName}:`, message)
+      console.warn(`[Tangent] Failed to start Dev Box ${devBoxName}:`, message)
       this.emit('devbox:error', devBoxName, message)
       return false
     }
   }
 
   /**
-   * Stop a Dev Box.
-   * 
-   * TODO: Implement using Dev Box data plane SDK or MCP server.
-   * Scope: /projects/{projectName}/users/me/devboxes/{devBoxName} (action: stop)
+   * Stop a Dev Box. Returns true if the stop was accepted.
    */
   async stopDevBox(projectName: string, devBoxName: string): Promise<boolean> {
+    if (!this.isConfigured) return false
     try {
-      console.log(`[Tangent 2] Stopping Dev Box: ${projectName}/${devBoxName} (not yet implemented)`)
-      
-      // TODO: Call Dev Box API to stop the box
-      // this.emit('devbox:state-changed', devBoxName, 'Stopping')
-      // ... wait for completion ...
-      // this.emit('devbox:state-changed', devBoxName, 'Stopped')
-      
-      return false // Not implemented
+      await this.request<void>(
+        'POST',
+        `/projects/${projectName}/users/me/devboxes/${devBoxName}:stop`
+      )
+      this.emit('devbox:state-changed', devBoxName, 'Stopping')
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Failed to stop Dev Box ${devBoxName}:`, message)
+      console.warn(`[Tangent] Failed to stop Dev Box ${devBoxName}:`, message)
       this.emit('devbox:error', devBoxName, message)
       return false
     }
   }
 
   /**
-   * Get connection information for a Dev Box.
-   * 
-   * TODO: Implement using Dev Box data plane SDK or MCP server.
-   * Scope: /projects/{projectName}/users/me/devboxes/{devBoxName} (action: getRemoteConnection)
+   * Get connection info for a Dev Box.
+   * Uses the Dev Center remote-connection endpoint.
    */
   async getConnectionInfo(
     projectName: string,
     devBoxName: string
   ): Promise<DevBoxConnectionInfo | null> {
+    if (!this.isConfigured) return null
     try {
-      console.log(`[Tangent 2] Getting connection info for ${projectName}/${devBoxName} (not yet implemented)`)
-      
-      // TODO: Call Dev Box API to get remote connection details
-      // Parse SSH connection string and return connection info
-      
-      return null // Not implemented
+      const data = await this.request<any>(
+        'GET',
+        `/projects/${projectName}/users/me/devboxes/${devBoxName}/remoteConnection`
+      )
+      return {
+        ipAddress: data.rdpConnectionUrl ?? '',
+        sshHost: data.webUrl ?? data.rdpConnectionUrl ?? '',
+        sshPort: 22,
+        sshUser: 'azureuser'
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Failed to get connection info for ${devBoxName}:`, message)
+      console.warn(`[Tangent] Failed to get connection info for ${devBoxName}:`, message)
       return null
     }
   }
 
   /**
-   * Check health status of a Dev Box.
-   * 
-   * TODO: Implement using Dev Box state check + actual connectivity tests.
-   * Should test both SSH (port 22) and ACP (port 7777) reachability.
+   * Check health by fetching Dev Box state from the API.
    */
   async checkHealth(
     projectName: string,
     devBoxName: string
   ): Promise<DevBoxHealthStatus> {
     try {
-      console.log(`[Tangent 2] Checking health for ${projectName}/${devBoxName} (not yet implemented)`)
-      
-      // TODO: Get Dev Box state from API
-      // TODO: Test SSH connectivity (port 22)
-      // TODO: Test ACP connectivity (port 7777)
-      
+      const devBox = await this.getDevBox(projectName, devBoxName)
+      const isRunning = devBox?.state === 'Running'
       const health: DevBoxHealthStatus = {
-        isHealthy: false,
-        sshReachable: false,
+        isHealthy: isRunning,
+        sshReachable: isRunning,
         acpReachable: false,
-        lastCheckAt: Date.now(),
-        error: 'Health check not yet implemented'
+        lastCheckAt: Date.now()
       }
-      
+      if (!isRunning) {
+        health.error = devBox ? `Dev Box state: ${devBox.state}` : 'Dev Box not found'
+      }
       this.emit('devbox:health-updated', devBoxName, health)
       return health
     } catch (error) {
@@ -209,12 +300,6 @@ export class DevBoxManager extends EventEmitter {
   /**
    * Auto-start a Dev Box and poll until ready.
    * Orchestrates start + polling with progress reporting.
-   * 
-   * @param projectName - Azure Dev Center project name
-   * @param devBoxName - Name of the Dev Box to start
-   * @param progressCallback - Optional callback for progress updates (state, elapsed time in ms)
-   * @returns DevBoxResource with state 'Running' and connection info
-   * @throws Error on timeout (5 minutes) or if Dev Box enters Failed state
    */
   async autoStart(
     projectName: string,
@@ -222,91 +307,78 @@ export class DevBoxManager extends EventEmitter {
     progressCallback?: (state: DevBoxProvisioningState, elapsed: number) => void
   ): Promise<DevBoxResource> {
     const startTime = Date.now()
-    const timeoutMs = 5 * 60 * 1000 // 5 minutes
-    const pollIntervalMs = 5 * 1000 // 5 seconds
+    const timeoutMs = 5 * 60 * 1000
+    const pollIntervalMs = 5 * 1000
 
     try {
-      console.log(`[Tangent 2] Auto-starting ${projectName}/${devBoxName}`)
-      
-      // Check current state first — if already running, skip start and return full resource
+      console.log(`[Tangent] Auto-starting ${projectName}/${devBoxName}`)
+
       const currentBox = await this.getDevBox(projectName, devBoxName)
       if (currentBox && currentBox.state === 'Running') {
-        console.log(`[Tangent 2] Dev Box ${devBoxName} already running`)
+        console.log(`[Tangent] Dev Box ${devBoxName} already running`)
         return currentBox
       }
 
-      // Start the Dev Box
       progressCallback?.('Starting', Date.now() - startTime)
       const started = await this.startDevBox(projectName, devBoxName)
       if (!started) {
         throw new Error('Failed to start Dev Box')
       }
 
-      // Poll until Running or timeout
       while (Date.now() - startTime < timeoutMs) {
         const devBox = await this.getDevBox(projectName, devBoxName)
         const state = devBox?.state || 'Failed'
         const elapsed = Date.now() - startTime
-        
-        // Report progress
+
         progressCallback?.(state, elapsed)
-        
-        // Success case
+
         if (state === 'Running') {
-          console.log(`[Tangent 2] Dev Box ${devBoxName} reached Running state after ${elapsed}ms`)
-          if (!devBox) {
-            throw new Error('Dev Box is running but resource data unavailable')
-          }
+          console.log(`[Tangent] Dev Box ${devBoxName} reached Running state after ${elapsed}ms`)
+          if (!devBox) throw new Error('Dev Box is running but resource data unavailable')
           return devBox
         }
-        
-        // Failure case
+
         if (state === 'Failed') {
           throw new Error(`Dev Box ${devBoxName} entered Failed state`)
         }
-        
-        // Continue polling
+
         await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
       }
 
-      // Timeout
       const elapsed = Date.now() - startTime
       throw new Error(`Timeout waiting for Dev Box ${devBoxName} to start (${elapsed}ms elapsed)`)
-      
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Failed to auto-start Dev Box ${devBoxName}:`, message)
+      console.warn(`[Tangent] Failed to auto-start Dev Box ${devBoxName}:`, message)
       this.emit('devbox:error', devBoxName, message)
       throw error
     }
   }
 
   /**
-   * Get Dev Box resource details.
-   * Helper method for status polling.
+   * Get a single Dev Box by name via REST API.
    */
-  private async getDevBox(
+  async getDevBox(
     projectName: string,
     devBoxName: string
   ): Promise<DevBoxResource | null> {
+    if (!this.isConfigured) return null
     try {
-      console.log(`[Tangent 2] Getting Dev Box details for ${projectName}/${devBoxName} (not yet implemented)`)
-      
-      if (!this.client) {
-        return null
-      }
-
-      const result = await this.client.getDevBox(projectName, devBoxName)
-      return result || null
+      const raw = await this.request<any>(
+        'GET',
+        `/projects/${projectName}/users/me/devboxes/${devBoxName}`
+      )
+      return this.mapDevBox(raw)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Failed to get Dev Box details:`, message)
+      console.warn(`[Tangent] Failed to get Dev Box details:`, message)
       return null
     }
   }
 
   dispose(): void {
-    this.client = null
+    this.credential = null
+    this.config = null
     this.removeAllListeners()
   }
 }
