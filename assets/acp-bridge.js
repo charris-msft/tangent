@@ -34,12 +34,26 @@ const server = net.createServer((socket) => {
 
   let proc = null
   let dataBuffer = []
-  const isWindows = process.platform === 'win32'
 
   activeClient = { socket, proc }
 
   function spawnCopilot() {
-    proc = spawn('npx', ['--yes', '@github/copilot', '--acp'], {
+    // Try global copilot first, fall back to npx
+    const isWindows = process.platform === 'win32'
+    let cmd, args
+    try {
+      // Check if copilot is available globally
+      const { execSync } = require('child_process')
+      execSync(isWindows ? 'where copilot' : 'which copilot', { stdio: 'ignore' })
+      cmd = 'copilot'
+      args = ['--acp']
+    } catch {
+      cmd = 'npx'
+      args = ['--yes', '@github/copilot', '--acp']
+    }
+
+    console.log(`🚀 Spawning: ${cmd} ${args.join(' ')}`)
+    proc = spawn(cmd, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: isWindows,
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
@@ -53,9 +67,24 @@ const server = net.createServer((socket) => {
     }
     dataBuffer = []
 
-    // Bridge: copilot stdout → socket
+    // Bridge: copilot stdout → socket (only forward valid ndjson lines)
+    let stdoutBuffer = ''
     proc.stdout.on('data', (data) => {
-      if (!socket.destroyed) socket.write(data)
+      if (socket.destroyed) return
+      stdoutBuffer += data.toString()
+      const lines = stdoutBuffer.split('\n')
+      stdoutBuffer = lines.pop() // keep incomplete line in buffer
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        // Only forward lines that look like JSON (start with {)
+        // This filters out npm/npx progress output and other noise
+        if (trimmed.startsWith('{')) {
+          socket.write(trimmed + '\n')
+        } else {
+          console.log(`[copilot stdout filtered] ${trimmed}`)
+        }
+      }
     })
 
     proc.stderr.on('data', (data) => {

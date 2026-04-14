@@ -146,7 +146,11 @@ export class AcpClient extends EventEmitter {
     } catch (err) {
       this.state = 'failed'
       const error = err instanceof Error ? err : new Error(String(err))
+      // Log full error details for debugging ACP protocol issues
       console.warn('[Tangent 2] AcpClient: Connection failed:', error.message)
+      if (err && typeof err === 'object' && 'code' in err) {
+        console.warn('[Tangent 2] AcpClient: Error code:', (err as any).code, 'data:', JSON.stringify((err as any).data))
+      }
       this.emit('acp:error', error)
       throw error
     }
