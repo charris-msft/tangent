@@ -50,6 +50,7 @@ function handleMessage(socket, msg) {
       break
 
     case 'session/create':
+    case 'session/new':
       respond({
         sessionId: `test-session-${Date.now()}`,
         agentName: 'test-agent',
@@ -62,8 +63,10 @@ function handleMessage(socket, msg) {
       break
 
     case 'prompt/send':
+    case 'prompt':
       // Send a streaming response then complete
       const sessionId = msg.params?.sessionId || 'unknown'
+      const promptText = msg.params?.messages?.[0]?.content?.[0]?.text || msg.params?.text || '(empty)'
       const notification = {
         jsonrpc: '2.0',
         method: 'session/update',
@@ -71,7 +74,7 @@ function handleMessage(socket, msg) {
           sessionId,
           message: {
             role: 'assistant',
-            content: `🎉 ACP test server received your prompt: "${msg.params?.text || '(empty)'}"\n\nThe remote connection pipeline is working end-to-end!`
+            content: `🎉 ACP test server received your prompt: "${promptText}"\n\nThe remote connection pipeline is working end-to-end!`
           },
           status: 'completed'
         }
