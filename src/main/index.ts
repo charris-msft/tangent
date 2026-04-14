@@ -178,6 +178,7 @@ function createWindow(): void {
     configStore,
     devBoxManager,
     acpClient,
+    remoteSessionManager,
     getWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   })
 
@@ -215,11 +216,18 @@ app.whenReady().then(async () => {
   })
   remoteSessionManager.on('remote:message', (sessionId: string, text: string) => {
     const win = getWin()
-    if (win) win.webContents.send('remote:message', sessionId, text)
+    if (win) {
+      win.webContents.send('remote:message', sessionId, text)
+      // Also push as terminal data so xterm.js renders the agent output
+      win.webContents.send(`terminal:data:${sessionId}`, text + '\r\n')
+    }
   })
   remoteSessionManager.on('remote:error', (sessionId: string, error: string) => {
     const win = getWin()
-    if (win) win.webContents.send('remote:error', sessionId, error)
+    if (win) {
+      win.webContents.send('remote:error', sessionId, error)
+      win.webContents.send(`terminal:data:${sessionId}`, `\r\n\x1b[31m❌ ${error}\x1b[0m\r\n`)
+    }
   })
 
   devBoxConnector.on('connection:ready', (connectionId: string) => {

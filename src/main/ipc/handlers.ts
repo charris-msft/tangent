@@ -24,9 +24,10 @@ export function registerIpcHandlers(deps: {
   configStore: ConfigStore
   devBoxManager?: DevBoxManager
   acpClient?: AcpClient
+  remoteSessionManager?: any
   getWindow: () => BrowserWindow | null
 }): void {
-  const { sessionManager, sessionStore, contextStore, ptyManager, agentStore, agentLauncher, configStore, devBoxManager, acpClient, getWindow } = deps
+  const { sessionManager, sessionStore, contextStore, ptyManager, agentStore, agentLauncher, configStore, devBoxManager, acpClient, remoteSessionManager, getWindow } = deps
 
   // --- Sessions ---
   ipcMain.handle('session:getAll', () => sessionStore.getAll())
@@ -58,7 +59,29 @@ export function registerIpcHandlers(deps: {
   // --- Terminal ---
   ipcMain.on('terminal:write', (_, sessionId: string, data: string) => {
     const session = sessionStore.get(sessionId)
-    if (session) ptyManager.write(session.ptyId, data)
+    if (!session) return
+
+    // Remote sessions: route input through ACP prompt instead of PTY
+    if (session.kind === 'remote-agent' && remoteSessionManager) {
+      // Collect input until Enter is pressed, then send as a prompt
+      // For now, detect Enter key and send accumulated text
+      if (data.includes('\r') || data.includes('\n')) {
+        const text = data.replace(/[\r\n]+/g, '').trim()
+        if (text) {
+          console.log(`[Tangent 2] Routing terminal input to ACP prompt: "${text.substring(0, 50)}..."`)
+          remoteSessionManager.sendPrompt(sessionId, text).catch((err: Error) => {
+            console.warn('[Tangent 2] Failed to send ACP prompt:', err.message)
+          })
+        }
+      }
+      // Echo the typed character back to the renderer for visual feedback
+      const win = getWindow()
+      if (win) win.webContents.send(`terminal:data:${sessionId}`, data)
+      return
+    }
+
+    // Local sessions: write to PTY as usual
+    if (session.ptyId) ptyManager.write(session.ptyId, data)
   })
 
   ipcMain.on('terminal:resize', (_, sessionId: string, cols: number, rows: number) => {
