@@ -57,18 +57,15 @@ export class StatusEngine {
   }
 
   /**
-   * Main entry point for PTY output.
-   * Feeds data through OscParser first, then SystemB.
+   * Main entry point for local PTY output.
+   * Feeds data through OscParser first, then SystemB + CwdTracker.
    *
-   * SKIP ALL STATUS DETECTION FOR REMOTE SESSIONS:
-   * Remote sessions (kind = 'remote-agent' or remoteState set) get their
-   * status from ACP events, not terminal output parsing. StatusEngine would
-   * conflict with remote state transitions.
+   * Skips remote sessions — use feedRemotePty() for PTY-mode remote sessions.
    */
   feed(data: string): void {
     if (this.disposed) return
 
-    // Skip status detection for remote sessions
+    // Skip status detection for remote sessions (use feedRemotePty instead)
     const session = this.store.get(this.sessionId)
     if (session && (session.kind === 'remote-agent' || session.remoteState !== undefined)) {
       return
@@ -77,6 +74,17 @@ export class StatusEngine {
     this.oscParser.feed(data)
     this.systemB.feed(data)
     this.cwdTracker.handleOutput(data)
+  }
+
+  /**
+   * Entry point for remote PTY output (full TUI via bridge).
+   * Feeds OscParser + SystemB for status detection but SKIPS CwdTracker
+   * because remote CWD paths (Dev Box) would corrupt local session data.
+   */
+  feedRemotePty(data: string): void {
+    if (this.disposed) return
+    this.oscParser.feed(data)
+    this.systemB.feed(data)
   }
 
   /**

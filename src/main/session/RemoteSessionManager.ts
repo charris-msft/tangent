@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { StringDecoder } from 'string_decoder'
 import type { DevBoxConnector } from '../devbox/DevBoxConnector'
 import type { DevBoxProvisioner } from '../devbox/DevBoxProvisioner'
 import type { AcpClient } from '../devbox/AcpClient'
@@ -6,6 +7,7 @@ import type { RsyncManager } from '../devbox/RsyncManager'
 import type { SessionStore } from './SessionStore'
 import type { PtyManager } from '../pty/PtyManager'
 import type { AgentStore } from '../agents/AgentStore'
+import { StatusEngine } from '../status/StatusEngine'
 import type { AgentProfile, RemoteSessionState } from '@shared/types'
 import type { AcpSessionConfig } from '@shared/acp-types'
 import { REMOTE_PORTS, buildRemoteWorkspacePath } from '@shared/constants'
@@ -59,6 +61,8 @@ export declare interface RemoteSessionManager {
 export class RemoteSessionManager extends EventEmitter {
   private remoteSessions = new Map<string, RemoteSessionHandle>()
   private reconnectionTimers = new Map<string, NodeJS.Timeout>()
+  private statusEngines = new Map<string, StatusEngine>()
+  private utf8Decoders = new Map<string, StringDecoder>()
 
   constructor(
     private devBoxConnector: DevBoxConnector,
@@ -244,13 +248,25 @@ export class RemoteSessionManager extends EventEmitter {
         handle.ptySocket = ptySocket
         console.log(`[Tangent 2] RemoteSessionManager: PTY bridge connected`)
 
-        // Forward PTY output → terminal
+        // Create StatusEngine for remote PTY status detection (OSC progress signals)
+        const engine = new StatusEngine(sessionId, '', this.sessionStore)
+        this.statusEngines.set(sessionId, engine)
+        const decoder = new StringDecoder('utf8')
+        this.utf8Decoders.set(sessionId, decoder)
+
+        // Forward PTY output → terminal + StatusEngine
         ptySocket.on('data', (data: Buffer) => {
           this.emit('remote:data', sessionId, data)
+          // Decode safely (handles split multi-byte UTF-8 chars across chunks)
+          const text = decoder.write(data)
+          if (text) {
+            engine.feedRemotePty(text)
+          }
         })
 
         ptySocket.on('close', () => {
           console.log(`[Tangent 2] RemoteSessionManager: PTY socket closed for ${sessionId}`)
+          this._disposeStatusEngine(sessionId)
         })
 
         ptySocket.on('error', (err: Error) => {
@@ -340,6 +356,7 @@ export class RemoteSessionManager extends EventEmitter {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Tangent 2] RemoteSessionManager: Failed to create session:`, message)
 
+      this._disposeStatusEngine(sessionId)
       this._updateState(handle, 'starting-devbox', message)
       this.sessionStore.updateStatus(sessionId, 'failed')
       this.sessionStore.updateActivity(sessionId, `Error: ${message}`)
@@ -497,7 +514,10 @@ export class RemoteSessionManager extends EventEmitter {
         console.log(`[Tangent 2] RemoteSessionManager: Dev Box disconnected`)
       }
 
-      // Step 4: Remove from SessionStore
+      // Step 4: Clean up StatusEngine and decoder
+      this._disposeStatusEngine(sessionId)
+
+      // Step 5: Remove from SessionStore
       this.sessionStore.remove(sessionId)
       this.remoteSessions.delete(sessionId)
 
@@ -933,7 +953,10 @@ export class RemoteSessionManager extends EventEmitter {
       // Update in store
       this.sessionStore.add(session) // add() will update if exists
 
-      // Step 7: Remove from remote sessions tracking
+      // Step 7: Clean up remote StatusEngine (local SessionManager will create its own)
+      this._disposeStatusEngine(sessionId)
+
+      // Step 8: Remove from remote sessions tracking
       this.remoteSessions.delete(sessionId)
 
       console.log(
@@ -949,6 +972,24 @@ export class RemoteSessionManager extends EventEmitter {
       this.sessionStore.updateActivity(sessionId, `Error: ${message}`)
       this.emit('remote:error', sessionId, message)
       throw error
+    }
+  }
+
+  /**
+   * Dispose the StatusEngine and StringDecoder for a remote session.
+   * Safe to call multiple times (idempotent).
+   */
+  private _disposeStatusEngine(sessionId: string): void {
+    const engine = this.statusEngines.get(sessionId)
+    if (engine) {
+      engine.dispose()
+      this.statusEngines.delete(sessionId)
+    }
+    // Flush any remaining bytes in the decoder
+    const decoder = this.utf8Decoders.get(sessionId)
+    if (decoder) {
+      decoder.end()
+      this.utf8Decoders.delete(sessionId)
     }
   }
 }
