@@ -38,7 +38,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $stepNumber = 0
-$totalSteps = 7
+$totalSteps = 8
 
 # Validate tunnel name meets devtunnel requirements: [a-z0-9][a-z0-9-]{1,58}[a-z0-9]
 if ($TunnelName -cnotmatch '^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$') {
@@ -429,7 +429,74 @@ $sw.Stop()
 Write-Elapsed $sw
 
 # ---------------------------------------------------------------------------
-# Step 6: Retrieve tunnel URL
+# Step 6: Install ACP Bridge (Copilot CLI remote agent server)
+# ---------------------------------------------------------------------------
+Write-Step "Setting up ACP Bridge for remote agent access"
+
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+$acpBridgeDir = Join-Path $env:USERPROFILE ".tangent"
+$acpBridgePath = Join-Path $acpBridgeDir "acp-bridge.js"
+
+if (-not (Test-Path $acpBridgeDir)) {
+    New-Item -ItemType Directory -Path $acpBridgeDir -Force | Out-Null
+}
+
+# Download or copy the ACP bridge script
+$bridgeUrl = "https://raw.githubusercontent.com/charris-msft/tangent/remote/assets/acp-bridge.js"
+Write-Detail "Downloading ACP bridge from $bridgeUrl..."
+try {
+    Invoke-WebRequest -Uri $bridgeUrl -OutFile $acpBridgePath -UseBasicParsing -ErrorAction Stop
+    Write-Success "ACP bridge downloaded to $acpBridgePath"
+} catch {
+    Write-Warn "Could not download ACP bridge. Copy assets/acp-bridge.js to $acpBridgePath manually."
+}
+
+# Install @github/copilot globally if not present
+Write-Detail "Checking for @github/copilot..."
+$copilotCheck = & npm list -g @github/copilot 2>&1
+if ($copilotCheck -match 'empty') {
+    Write-Detail "Installing @github/copilot globally..."
+    & npm install -g @github/copilot 2>&1 | Out-Null
+    Write-Success "@github/copilot installed globally"
+} else {
+    Write-Success "@github/copilot already installed"
+}
+
+# Create scheduled task for ACP bridge (auto-start at logon)
+$acpTaskName = "Tangent-ACP-Bridge"
+$nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
+if (-not $nodePath) { $nodePath = "node" }
+
+$existingAcpTask = Get-ScheduledTask -TaskName $acpTaskName -ErrorAction SilentlyContinue
+if ($existingAcpTask) {
+    Write-Success "Scheduled task '$acpTaskName' already exists (state: $($existingAcpTask.State))"
+} else {
+    Write-Detail "Creating scheduled task for ACP bridge (port 7333)..."
+    $acpAction = New-ScheduledTaskAction -Execute $nodePath -Argument "`"$acpBridgePath`" 7333"
+    $acpTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $acpSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $acpTaskName -Action $acpAction -Trigger $acpTrigger -Settings $acpSettings -RunLevel Highest -Force | Out-Null
+    Write-Success "Scheduled task '$acpTaskName' created (runs at logon, port 7333)"
+}
+
+Write-Detail "Starting ACP bridge..."
+Start-ScheduledTask -TaskName $acpTaskName -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+# Verify it's listening
+$acpListening = Get-NetTCPConnection -LocalPort 7333 -State Listen -ErrorAction SilentlyContinue
+if ($acpListening) {
+    Write-Success "ACP bridge is listening on port 7333"
+} else {
+    Write-Warn "ACP bridge may still be starting. Run 'node $acpBridgePath 7333' manually to test."
+}
+
+$sw.Stop()
+Write-Elapsed $sw
+
+# ---------------------------------------------------------------------------
+# Step 7: Retrieve tunnel URL
 # ---------------------------------------------------------------------------
 Write-Step "Retrieving tunnel connection info"
 
