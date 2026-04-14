@@ -3,8 +3,11 @@
  * ACP Bridge — wraps `@github/copilot --acp` (stdio) as a TCP server.
  *
  * The Copilot CLI's --acp mode speaks ndjson over stdin/stdout.
- * This bridge spawns it as a child process and exposes it on a TCP port
- * so Tangent can connect through a dev tunnel.
+ * This bridge listens on a TCP port and spawns a Copilot process
+ * per connection, bridging TCP ↔ stdio.
+ *
+ * Copilot is only spawned when the client sends data (not on bare TCP connect),
+ * so health-check probes don't waste resources.
  *
  * Usage:
  *   node acp-bridge.js [port]       # default: 7333
@@ -15,22 +18,8 @@
 
 const net = require('net')
 const { spawn } = require('child_process')
-const path = require('path')
 
 const PORT = parseInt(process.argv[2] || '7333', 10)
-
-// Find the copilot binary — try npx resolution first
-function findCopilotBin() {
-  try {
-    const result = require('child_process').execSync('npx --yes which @github/copilot 2>nul || where copilot 2>nul || which copilot 2>/dev/null', {
-      encoding: 'utf-8',
-      timeout: 10000
-    }).trim()
-    if (result) return result
-  } catch {}
-  // Fallback: use npx
-  return null
-}
 
 let activeClient = null
 
@@ -38,82 +27,89 @@ const server = net.createServer((socket) => {
   if (activeClient) {
     console.log('⚠ New client connected — disconnecting previous')
     activeClient.socket.destroy()
-    if (activeClient.proc) {
-      activeClient.proc.kill()
-    }
+    if (activeClient.proc) activeClient.proc.kill()
   }
 
   console.log(`✅ Client connected from ${socket.remoteAddress}:${socket.remotePort}`)
 
-  // Spawn copilot --acp as a child process
+  let proc = null
+  let dataBuffer = []
   const isWindows = process.platform === 'win32'
-  const proc = spawn('npx', ['--yes', '@github/copilot', '--acp'], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    shell: isWindows,
-    env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
-  })
-
-  console.log(`🚀 Copilot CLI spawned (PID ${proc.pid})`)
 
   activeClient = { socket, proc }
 
-  // Bridge: socket → copilot stdin
+  function spawnCopilot() {
+    proc = spawn('npx', ['--yes', '@github/copilot', '--acp'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: isWindows,
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
+    })
+    activeClient.proc = proc
+    console.log(`🚀 Copilot CLI spawned (PID ${proc.pid})`)
+
+    // Flush buffered data
+    for (const chunk of dataBuffer) {
+      if (proc.stdin.writable) proc.stdin.write(chunk)
+    }
+    dataBuffer = []
+
+    // Bridge: copilot stdout → socket
+    proc.stdout.on('data', (data) => {
+      if (!socket.destroyed) socket.write(data)
+    })
+
+    proc.stderr.on('data', (data) => {
+      const text = data.toString().trim()
+      if (text) console.log(`[copilot stderr] ${text}`)
+    })
+
+    proc.on('close', (code) => {
+      console.log(`🔌 Copilot process exited (code ${code})`)
+      if (!socket.destroyed) socket.destroy()
+      if (activeClient?.proc === proc) activeClient = null
+    })
+
+    proc.on('error', (err) => {
+      console.error(`❌ Failed to spawn copilot: ${err.message}`)
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({
+          jsonrpc: '2.0', id: null,
+          error: { code: -1, message: `Failed to spawn copilot: ${err.message}` }
+        }) + '\n')
+        socket.destroy()
+      }
+    })
+  }
+
+  // Bridge: socket → copilot stdin (lazy spawn on first data)
   socket.on('data', (data) => {
-    if (proc.stdin.writable) {
+    if (!proc) {
+      dataBuffer.push(data)
+      spawnCopilot()
+    } else if (proc.stdin.writable) {
       proc.stdin.write(data)
     }
   })
 
-  // Bridge: copilot stdout → socket
-  proc.stdout.on('data', (data) => {
-    if (!socket.destroyed) {
-      socket.write(data)
-    }
-  })
-
-  // Log stderr but don't send to client
-  proc.stderr.on('data', (data) => {
-    const text = data.toString().trim()
-    if (text) {
-      console.log(`[copilot stderr] ${text}`)
-    }
-  })
-
-  // Handle disconnects
   socket.on('close', () => {
     console.log('🔌 Client disconnected')
-    if (proc.stdin.writable) proc.stdin.end()
-    proc.kill()
+    if (proc) {
+      if (proc.stdin.writable) proc.stdin.end()
+      proc.kill()
+    }
     if (activeClient?.socket === socket) activeClient = null
   })
 
   socket.on('error', (err) => {
     console.warn(`⚠ Socket error: ${err.message}`)
   })
-
-  proc.on('close', (code) => {
-    console.log(`🔌 Copilot process exited (code ${code})`)
-    if (!socket.destroyed) socket.destroy()
-    if (activeClient?.proc === proc) activeClient = null
-  })
-
-  proc.on('error', (err) => {
-    console.error(`❌ Failed to spawn copilot: ${err.message}`)
-    if (!socket.destroyed) {
-      socket.write(JSON.stringify({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -1, message: `Failed to spawn copilot: ${err.message}` }
-      }) + '\n')
-      socket.destroy()
-    }
-  })
 })
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🌉 ACP Bridge listening on port ${PORT}`)
   console.log(`   Each client connection spawns: npx @github/copilot --acp`)
-  console.log(`   Bridging TCP ↔ stdio (ndjson)\n`)
+  console.log(`   Bridging TCP ↔ stdio (ndjson)`)
+  console.log(`   Copilot only spawned when client sends data (probes ignored)\n`)
   console.log(`   Waiting for Tangent to connect via dev tunnel...\n`)
 })
 
@@ -126,7 +122,6 @@ server.on('error', (err) => {
   process.exit(1)
 })
 
-// Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down...')
   if (activeClient?.proc) activeClient.proc.kill()
