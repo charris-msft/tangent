@@ -57,26 +57,46 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle('tooluse:getAll', (_, sessionId: string) => sessionStore.getToolUse(sessionId))
 
   // --- Terminal ---
+  // Input buffer for remote sessions (accumulates characters until Enter)
+  const remoteInputBuffers = new Map<string, string>()
+
   ipcMain.on('terminal:write', (_, sessionId: string, data: string) => {
     const session = sessionStore.get(sessionId)
     if (!session) return
 
     // Remote sessions: route input through ACP prompt instead of PTY
     if (session.kind === 'remote-agent' && remoteSessionManager) {
-      // Collect input until Enter is pressed, then send as a prompt
-      // For now, detect Enter key and send accumulated text
-      if (data.includes('\r') || data.includes('\n')) {
-        const text = data.replace(/[\r\n]+/g, '').trim()
-        if (text) {
-          console.log(`[Tangent 2] Routing terminal input to ACP prompt: "${text.substring(0, 50)}..."`)
-          remoteSessionManager.sendPrompt(sessionId, text).catch((err: Error) => {
-            console.warn('[Tangent 2] Failed to send ACP prompt:', err.message)
-          })
-        }
-      }
       // Echo the typed character back to the renderer for visual feedback
       const win = getWindow()
       if (win) win.webContents.send(`terminal:data:${sessionId}`, data)
+
+      // Accumulate input in a buffer, send on Enter
+      let buffer = remoteInputBuffers.get(sessionId) || ''
+      
+      for (const ch of data) {
+        if (ch === '\r' || ch === '\n') {
+          // Enter pressed — send accumulated prompt
+          const text = buffer.trim()
+          if (text) {
+            console.log(`[Tangent 2] Routing terminal input to ACP prompt: "${text.substring(0, 80)}"`)
+            // Echo newline for visual feedback
+            if (win) win.webContents.send(`terminal:data:${sessionId}`, '\r\n')
+            remoteSessionManager.sendPrompt(sessionId, text).catch((err: Error) => {
+              console.warn('[Tangent 2] Failed to send ACP prompt:', err.message)
+              if (win) win.webContents.send(`terminal:data:${sessionId}`, `\r\n\x1b[31m❌ ${err.message}\x1b[0m\r\n`)
+            })
+          }
+          buffer = ''
+        } else if (ch === '\x7f' || ch === '\b') {
+          // Backspace
+          buffer = buffer.slice(0, -1)
+        } else if (ch.charCodeAt(0) >= 32) {
+          // Regular printable character
+          buffer += ch
+        }
+      }
+      
+      remoteInputBuffers.set(sessionId, buffer)
       return
     }
 
