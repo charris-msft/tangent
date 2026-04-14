@@ -18,6 +18,7 @@ const CONFIG_PATH = join(homedir(), '.tangent', 'devbox-config.json')
 interface DevBoxTunnelConfig {
   tunnelHost: string
   tunnelId?: string
+  tunnelName?: string
   sshUser: string
   sshPort?: number
   sshKeyPath?: string
@@ -313,9 +314,9 @@ export class DevBoxManager extends EventEmitter {
       // Look up per-devbox tunnel config
       const tunnelCfg = this.getTunnelConfig(devBoxName)
 
-      // Extract tunnel ID from the tunnel host URL if not explicitly set
-      // e.g. "mbhj7258-22.usw2.devtunnels.ms" → tunnel ID is "mbhj7258"
-      let tunnelId = tunnelCfg?.tunnelId
+      // Use tunnelName (full name for devtunnel connect) if provided,
+      // otherwise fall back to tunnelId or extract from tunnelHost URL
+      let tunnelId = tunnelCfg?.tunnelName ?? tunnelCfg?.tunnelId
       if (!tunnelId && tunnelCfg?.tunnelHost) {
         const match = tunnelCfg.tunnelHost.match(/^([a-z0-9-]+?)(?:-\d+)?\./)
         if (match) tunnelId = match[1]

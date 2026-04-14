@@ -90,41 +90,33 @@ export class DevTunnelManager extends EventEmitter {
         console.log(`[Tangent 2] DevTunnel stdout: ${text.trim()}`)
 
         // Parse all port mappings from output
-        // Format varies but typically: "Port 22 is available at localhost:12345"
-        // or "Forwarding port 22 to localhost:12345"
-        // or table format with local port assignments
-        // Match pattern: remote port → localhost:local port
-        const portPatterns = [
-          /(?:port\s+)?(\d+)\s+.*?localhost:(\d+)/gi,
-          /localhost:(\d+)\s+.*?(?:port\s+)?(\d+)/gi,
-          /(\d{4,5})\s*→\s*(\d+)/gi,
-          /(\d+)\s*→\s*.*?:(\d+)/gi
-        ]
+        // Actual devtunnel connect output format:
+        // "SSH: Forwarding from 127.0.0.1:22 to host port 22."
+        // "SSH: Forwarding from 127.0.0.1:7333 to host port 7333."
+        const forwardingRegex = /Forwarding from [\d.:[\]]+:(\d+) to host port (\d+)/gi
+        let fwdMatch
+        while ((fwdMatch = forwardingRegex.exec(text)) !== null) {
+          const localPort = parseInt(fwdMatch[1], 10)
+          const remotePort = parseInt(fwdMatch[2], 10)
+          if (portsNeeded.has(remotePort)) {
+            conn.localPorts.set(remotePort, localPort)
+            portsFound.add(remotePort)
+            console.log(`[Tangent 2] DevTunnel: port ${remotePort} → localhost:${localPort}`)
+          }
+        }
 
-        for (const pattern of portPatterns) {
-          let match
-          while ((match = pattern.exec(text)) !== null) {
-            const remotePort = parseInt(match[1], 10)
-            const localPort = parseInt(match[2], 10)
-            
-            // Check if this is a port we care about
+        // Fallback: "port REMOTE ... localhost:LOCAL" or table format
+        if (portsFound.size === 0) {
+          const fallbackRegex = /port\s+(\d+)\s+.*?localhost:(\d+)/gi
+          let fbMatch
+          while ((fbMatch = fallbackRegex.exec(text)) !== null) {
+            const remotePort = parseInt(fbMatch[1], 10)
+            const localPort = parseInt(fbMatch[2], 10)
             if (portsNeeded.has(remotePort)) {
               conn.localPorts.set(remotePort, localPort)
               portsFound.add(remotePort)
               console.log(`[Tangent 2] DevTunnel: port ${remotePort} → localhost:${localPort}`)
             }
-          }
-        }
-
-        // Also try inverse pattern (local:remote)
-        const inverseMatch = text.match(/localhost:(\d+)\s+.*?(?:port\s+)?(\d+)/i)
-        if (inverseMatch) {
-          const localPort = parseInt(inverseMatch[1], 10)
-          const remotePort = parseInt(inverseMatch[2], 10)
-          if (portsNeeded.has(remotePort) && !conn.localPorts.has(remotePort)) {
-            conn.localPorts.set(remotePort, localPort)
-            portsFound.add(remotePort)
-            console.log(`[Tangent 2] DevTunnel: port ${remotePort} → localhost:${localPort}`)
           }
         }
 
