@@ -57,29 +57,32 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle('tooluse:getAll', (_, sessionId: string) => sessionStore.getToolUse(sessionId))
 
   // --- Terminal ---
-  // Input buffer for remote sessions (accumulates characters until Enter)
+  // Input buffer for remote ACP sessions (accumulates characters until Enter)
   const remoteInputBuffers = new Map<string, string>()
 
   ipcMain.on('terminal:write', (_, sessionId: string, data: string) => {
     const session = sessionStore.get(sessionId)
     if (!session) return
 
-    // Remote sessions: route input through ACP prompt instead of PTY
+    // Remote sessions: route based on mode (PTY vs ACP)
     if (session.kind === 'remote-agent' && remoteSessionManager) {
-      // Echo the typed character back to the renderer for visual feedback
+      // PTY mode: forward raw bytes directly to bridge socket (full TUI)
+      if (remoteSessionManager.isPtyMode(sessionId)) {
+        remoteSessionManager.writePty(sessionId, data)
+        return
+      }
+
+      // ACP mode: accumulate input, send as prompt on Enter
       const win = getWindow()
       if (win) win.webContents.send(`terminal:data:${sessionId}`, data)
 
-      // Accumulate input in a buffer, send on Enter
       let buffer = remoteInputBuffers.get(sessionId) || ''
       
       for (const ch of data) {
         if (ch === '\r' || ch === '\n') {
-          // Enter pressed — send accumulated prompt
           const text = buffer.trim()
           if (text) {
             console.log(`[Tangent 2] Routing terminal input to ACP prompt: "${text.substring(0, 80)}"`)
-            // Echo newline for visual feedback
             if (win) win.webContents.send(`terminal:data:${sessionId}`, '\r\n')
             remoteSessionManager.sendPrompt(sessionId, text).catch((err: Error) => {
               console.warn('[Tangent 2] Failed to send ACP prompt:', err.message)
@@ -88,10 +91,8 @@ export function registerIpcHandlers(deps: {
           }
           buffer = ''
         } else if (ch === '\x7f' || ch === '\b') {
-          // Backspace
           buffer = buffer.slice(0, -1)
         } else if (ch.charCodeAt(0) >= 32) {
-          // Regular printable character
           buffer += ch
         }
       }
@@ -106,7 +107,16 @@ export function registerIpcHandlers(deps: {
 
   ipcMain.on('terminal:resize', (_, sessionId: string, cols: number, rows: number) => {
     const session = sessionStore.get(sessionId)
-    if (session) ptyManager.resize(session.ptyId, cols, rows)
+    if (!session) return
+
+    // Remote PTY sessions: send resize control frame
+    if (session.kind === 'remote-agent' && remoteSessionManager?.isPtyMode(sessionId)) {
+      remoteSessionManager.resizePty(sessionId, cols, rows)
+      return
+    }
+
+    // Local sessions: resize PTY
+    if (session.ptyId) ptyManager.resize(session.ptyId, cols, rows)
   })
 
   // PTY data -> renderer (set up per session when created)

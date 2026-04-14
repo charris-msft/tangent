@@ -51,7 +51,8 @@ describe('Remote Session Integration', () => {
       devBoxProject: 'tangent-project',
       devBoxName: 'tangent-dev-1',
       repoPath: '/home/workspace',
-      sshUser: 'azureuser'
+      sshUser: 'azureuser',
+      protocol: 'acp' as const
     }
   }
 
@@ -765,7 +766,8 @@ describe('Remote Session Integration', () => {
           devBoxProject: 'tangent-project',
           devBoxName: 'tangent-dev-1',
           repoPath: '/home/workspace',
-          sshUser: 'azureuser'
+          sshUser: 'azureuser',
+          protocol: 'acp' as const
         }
       }
 

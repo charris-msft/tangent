@@ -126,6 +126,7 @@ export interface AgentProfile {
     devBoxName?: string
     repoPath?: string
     sshUser?: string
+    protocol?: 'pty' | 'acp'  // default: 'pty' (full TUI), 'acp' for headless
   }
 }
 

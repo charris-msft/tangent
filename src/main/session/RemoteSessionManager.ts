@@ -17,6 +17,8 @@ interface RemoteSessionHandle {
   localPath: string
   connectionId?: string
   acpSessionId?: string
+  ptySocket?: import('net').Socket
+  mode: 'acp' | 'pty'
   state: RemoteSessionState
   error?: string
   startedAt: number
@@ -28,6 +30,7 @@ export interface RemoteSessionManagerEvents {
   'remote:state-changed': (sessionId: string, state: RemoteSessionState) => void
   'remote:error': (sessionId: string, error: string) => void
   'remote:message': (sessionId: string, text: string) => void
+  'remote:data': (sessionId: string, data: Buffer) => void
 }
 
 export declare interface RemoteSessionManager {
@@ -104,11 +107,15 @@ export class RemoteSessionManager extends EventEmitter {
       throw new Error('Agent profile missing Dev Box configuration')
     }
 
+    // Default to PTY mode for full TUI; fall back to ACP if agent specifies it
+    const remoteMode = agentProfile.remote.protocol === 'acp' ? 'acp' : 'pty'
+
     const sessionId = `remote-${Date.now()}-${Math.random().toString(36).substring(7)}`
     const handle: RemoteSessionHandle = {
       sessionId,
       agentProfile,
       localPath,
+      mode: remoteMode,
       state: 'starting-devbox',
       startedAt: Date.now(),
       reconnectionAttempts: 0
@@ -209,58 +216,103 @@ export class RemoteSessionManager extends EventEmitter {
         console.warn(`[Tangent 2] RemoteSessionManager: Workspace sync error (non-fatal): ${msg}`)
       }
 
-      // Step 4: Connect ACP client via the SSH tunnel
-      this._updateState(handle, 'tunneling')
-      this.sessionStore.updateActivity(sessionId, 'Establishing ACP tunnel...')
-
-      console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
-
-      // Use the actual tunneled local port from the connector, not the static constant
+      // Step 4+5: Connect to bridge (PTY or ACP mode)
       const acpLocalPort = connectionStatus.acpLocalPort ?? REMOTE_PORTS.ACP_LOCAL
-      console.log(`[Tangent 2] RemoteSessionManager: ACP local port = ${acpLocalPort}`)
-      try {
-        await this.acpClient.connect({
-          host: '127.0.0.1',
-          port: acpLocalPort,
-          username: connInfo?.sshUser ?? 'azureuser',
-          acpPort: acpLocalPort
+
+      if (handle.mode === 'pty') {
+        // PTY mode: raw TCP socket to pty-bridge, full TUI
+        this._updateState(handle, 'tunneling')
+        this.sessionStore.updateActivity(sessionId, 'Connecting to PTY bridge...')
+
+        console.log(`[Tangent 2] RemoteSessionManager: Connecting PTY via tunnel port ${acpLocalPort}...`)
+
+        const { createConnection } = await import('net')
+        const ptySocket = createConnection({ host: '127.0.0.1', port: acpLocalPort })
+
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            ptySocket.destroy()
+            reject(new Error(`PTY bridge connection timeout (port ${acpLocalPort})`))
+          }, 15000)
+
+          ptySocket.on('connect', () => {
+            clearTimeout(timeout)
+            resolve()
+          })
+          ptySocket.on('error', (err) => {
+            clearTimeout(timeout)
+            reject(err)
+          })
         })
-      } catch (acpErr) {
-        const acpMsg = acpErr instanceof Error ? acpErr.message : String(acpErr)
-        if (acpMsg.includes('ECONNREFUSED')) {
-          throw new Error(
-            `No ACP service on Dev Box (port ${acpLocalPort}). ` +
-            `Run 'node acp-test-server.js' on the Dev Box or start the Copilot agent runtime.`
-          )
+
+        handle.ptySocket = ptySocket
+        console.log(`[Tangent 2] RemoteSessionManager: PTY bridge connected`)
+
+        // Forward PTY output → terminal
+        ptySocket.on('data', (data: Buffer) => {
+          this.emit('remote:data', sessionId, data)
+        })
+
+        ptySocket.on('close', () => {
+          console.log(`[Tangent 2] RemoteSessionManager: PTY socket closed for ${sessionId}`)
+        })
+
+        ptySocket.on('error', (err: Error) => {
+          console.warn(`[Tangent 2] RemoteSessionManager: PTY socket error: ${err.message}`)
+        })
+
+        // Send initial newline to trigger Copilot spawn on the bridge
+        ptySocket.write('\n')
+
+      } else {
+        // ACP mode: ndjson protocol (headless, no TUI)
+        this._updateState(handle, 'tunneling')
+        this.sessionStore.updateActivity(sessionId, 'Establishing ACP tunnel...')
+
+        console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
+        console.log(`[Tangent 2] RemoteSessionManager: ACP local port = ${acpLocalPort}`)
+
+        try {
+          await this.acpClient.connect({
+            host: '127.0.0.1',
+            port: acpLocalPort,
+            username: connInfo?.sshUser ?? 'azureuser',
+            acpPort: acpLocalPort
+          })
+        } catch (acpErr) {
+          const acpMsg = acpErr instanceof Error ? acpErr.message : String(acpErr)
+          if (acpMsg.includes('ECONNREFUSED')) {
+            throw new Error(
+              `No ACP service on Dev Box (port ${acpLocalPort}). ` +
+              `Run 'node acp-test-server.js' on the Dev Box or start the Copilot agent runtime.`
+            )
+          }
+          throw acpErr
         }
-        throw acpErr
-      }
 
-      // Step 5: Create ACP session
-      this._updateState(handle, 'verifying-acp')
-      this.sessionStore.updateActivity(sessionId, 'Connecting to agent...')
+        this._updateState(handle, 'verifying-acp')
+        this.sessionStore.updateActivity(sessionId, 'Connecting to agent...')
 
-      console.log(`[Tangent 2] RemoteSessionManager: Creating ACP session...`)
+        console.log(`[Tangent 2] RemoteSessionManager: Creating ACP session...`)
 
-      // Create ACP session
-      const acpConfig: AcpSessionConfig = {
-        sessionId,
-        cwd: remoteWorkspacePath,
-        env: agentProfile.env
-      }
+        const acpConfig: AcpSessionConfig = {
+          sessionId,
+          cwd: remoteWorkspacePath,
+          env: agentProfile.env
+        }
 
-      const acpSession = await this.acpClient.newSession(acpConfig)
-      handle.acpSessionId = acpSession.id
+        const acpSession = await this.acpClient.newSession(acpConfig)
+        handle.acpSessionId = acpSession.id
 
-      console.log(
-        `[Tangent 2] RemoteSessionManager: ACP session created: ${acpSession.id}`
-      )
+        console.log(
+          `[Tangent 2] RemoteSessionManager: ACP session created: ${acpSession.id}`
+        )
 
-      // Update SessionStore with ACP session ID
-      const session = this.sessionStore.get(sessionId)
-      if (session) {
-        session.acpSessionId = acpSession.id
-        session.updatedAt = Date.now()
+        const session = this.sessionStore.get(sessionId)
+        if (session) {
+          session.acpSessionId = acpSession.id
+          session.updatedAt = Date.now()
+        }
       }
 
       // Step 6: Session is running
@@ -327,6 +379,42 @@ export class RemoteSessionManager extends EventEmitter {
       this.emit('remote:error', sessionId, message)
       throw error
     }
+  }
+
+  /**
+   * Write raw terminal data to a PTY-mode remote session.
+   * Data is forwarded directly to the pty-bridge TCP socket.
+   */
+  writePty(sessionId: string, data: string): void {
+    const handle = this.remoteSessions.get(sessionId)
+    if (!handle || handle.mode !== 'pty' || !handle.ptySocket) return
+
+    handle.ptySocket.write(data)
+  }
+
+  /**
+   * Resize the PTY for a remote session.
+   * Sends a control frame: \x00\x00\x01 + cols(2BE) + rows(2BE)
+   */
+  resizePty(sessionId: string, cols: number, rows: number): void {
+    const handle = this.remoteSessions.get(sessionId)
+    if (!handle || handle.mode !== 'pty' || !handle.ptySocket) return
+
+    const buf = Buffer.alloc(7)
+    buf[0] = 0x00
+    buf[1] = 0x00
+    buf[2] = 0x01
+    buf.writeUInt16BE(cols, 3)
+    buf.writeUInt16BE(rows, 5)
+    handle.ptySocket.write(buf)
+  }
+
+  /**
+   * Check if a remote session is in PTY mode.
+   */
+  isPtyMode(sessionId: string): boolean {
+    const handle = this.remoteSessions.get(sessionId)
+    return handle?.mode === 'pty'
   }
 
   /**

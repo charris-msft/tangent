@@ -29,7 +29,8 @@ describe('RemoteSessionManager', () => {
       devBoxProject: 'test-project',
       devBoxName: 'test-devbox',
       repoPath: '/home/workspace',
-      sshUser: 'testuser'
+      sshUser: 'testuser',
+      protocol: 'acp'
     }
   }
 

@@ -222,6 +222,13 @@ app.whenReady().then(async () => {
       win.webContents.send(`terminal:data:${sessionId}`, text + '\r\n')
     }
   })
+  // PTY mode: forward raw terminal bytes directly to xterm.js
+  remoteSessionManager.on('remote:data', (sessionId: string, data: Buffer) => {
+    const win = getWin()
+    if (win) {
+      win.webContents.send(`terminal:data:${sessionId}`, data)
+    }
+  })
   remoteSessionManager.on('remote:error', (sessionId: string, error: string) => {
     const win = getWin()
     if (win) {

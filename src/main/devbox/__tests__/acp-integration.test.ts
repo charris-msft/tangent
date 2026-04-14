@@ -304,12 +304,7 @@ describe('ACP Integration', () => {
 
       expect(mockMethods.prompt).toHaveBeenCalledWith({
         sessionId: 'acp-sess-1',
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: 'Write a test' }]
-          }
-        ]
+        prompt: [{ type: 'text', text: 'Write a test' }]
       })
     })
 
