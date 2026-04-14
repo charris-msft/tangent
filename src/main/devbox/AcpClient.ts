@@ -132,20 +132,28 @@ export class AcpClient extends EventEmitter {
       this.state = 'connected'
       this.emit('acp:connected')
 
-      // Set up connection closed handler
-      this.connection.closed
-        .then(() => {
-          this.state = 'disconnected'
-          this.emit('acp:disconnected')
-          this.connection = null
-        })
-        .catch((err) => {
-          this.state = 'failed'
-          const error = err instanceof Error ? err : new Error(String(err))
-          console.warn('[Tangent 2] AcpClient: Connection closed with error:', error.message)
-          this.emit('acp:error', error)
-          this.connection = null
-        })
+      // Set up connection closed handler (with defensive null check)
+      const conn = this.connection
+      if (conn?.closed) {
+        conn.closed
+          .then(() => {
+            // Only clear if this is still the active connection
+            if (this.connection === conn) {
+              this.state = 'disconnected'
+              this.emit('acp:disconnected')
+              this.connection = null
+            }
+          })
+          .catch((err) => {
+            if (this.connection === conn) {
+              this.state = 'failed'
+              const error = err instanceof Error ? err : new Error(String(err))
+              console.warn('[Tangent 2] AcpClient: Connection closed with error:', error.message)
+              this.emit('acp:error', error)
+              this.connection = null
+            }
+          })
+      }
     } catch (err) {
       this.state = 'failed'
       const error = err instanceof Error ? err : new Error(String(err))
@@ -348,7 +356,13 @@ export class AcpClient extends EventEmitter {
       await doSend()
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Prompt failed:', error.message, '— attempting reconnect')
+      // Log full error details including JSON-RPC code
+      const code = (err as any)?.code
+      const data = (err as any)?.data
+      console.warn('[Tangent 2] AcpClient: Prompt failed:', error.message,
+        code ? `(code: ${code})` : '',
+        data ? `data: ${JSON.stringify(data)}` : '',
+        '— attempting reconnect')
 
       // Try reconnecting and retrying once
       try {
