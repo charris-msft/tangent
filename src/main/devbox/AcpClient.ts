@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { Readable } from 'stream'
 import { ClientSideConnection, type Client, type Stream, ndJsonStream } from '@agentclientprotocol/sdk'
 import type * as schema from '@agentclientprotocol/sdk'
 import type {
@@ -62,8 +63,21 @@ export class AcpClient extends EventEmitter {
         })
       })
 
-      // Wrap the TCP socket as an ndJsonStream for the ACP SDK
-      const stream = ndJsonStream(socket, socket)
+      // Convert Node.js socket to Web Streams for the ACP SDK's ndJsonStream
+      const webReadable = Readable.toWeb(socket) as ReadableStream<Uint8Array>
+      const webWritable = new WritableStream<Uint8Array>({
+        write(chunk) {
+          return new Promise<void>((resolve, reject) => {
+            const ok = socket.write(chunk, (err) => err ? reject(err) : undefined)
+            if (ok) resolve()
+            else socket.once('drain', resolve)
+          })
+        },
+        close() { socket.end() },
+        abort(reason) { socket.destroy(reason instanceof Error ? reason : new Error(String(reason))) }
+      })
+
+      const stream = ndJsonStream(webWritable, webReadable)
       await this.connectWithStream(stream)
     } catch (err) {
       this.state = 'failed'
