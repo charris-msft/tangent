@@ -208,10 +208,12 @@ export class RemoteSessionManager extends EventEmitter {
       console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
 
       const connInfo = connectionStatus.connectionInfo
-      const acpLocalPort = REMOTE_PORTS.ACP_LOCAL
+      // Use the actual tunneled local port from the connector, not the static constant
+      const acpLocalPort = connectionStatus.acpLocalPort ?? REMOTE_PORTS.ACP_LOCAL
+      console.log(`[Tangent 2] RemoteSessionManager: ACP local port = ${acpLocalPort}`)
       await this.acpClient.connect({
-        host: connInfo?.sshHost ?? '127.0.0.1',
-        port: connInfo?.sshPort ?? 22,
+        host: '127.0.0.1',
+        port: acpLocalPort,
         username: connInfo?.sshUser ?? 'azureuser',
         acpPort: acpLocalPort
       })
