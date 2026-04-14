@@ -30,6 +30,7 @@ let currentSocket = null
 let copilotProc = null
 let graceTimer = null
 let ptyModule = null
+let pendingCwd = os.homedir() // Default cwd, updated by control frame
 
 // Try to load node-pty for proper PTY support
 try {
@@ -64,13 +65,25 @@ function spawnCopilot(cols, rows) {
 
   if (ptyModule) {
     // Spawn in a real PTY — this gives full TUI support
-    console.log(`🚀 Spawning PTY: ${cmd} ${args.join(' ')} (${cols}x${rows})`)
+    // Ensure cwd exists (create if needed)
+    const fs = require('fs')
+    if (!fs.existsSync(pendingCwd)) {
+      try {
+        fs.mkdirSync(pendingCwd, { recursive: true })
+        console.log(`📁 Created workspace dir: ${pendingCwd}`)
+      } catch (mkdirErr) {
+        console.warn(`⚠ Could not create ${pendingCwd}: ${mkdirErr.message}, falling back to home`)
+        pendingCwd = os.homedir()
+      }
+    }
+
+    console.log(`🚀 Spawning PTY: ${cmd} ${args.join(' ')} (${cols}x${rows}) cwd=${pendingCwd}`)
     try {
       copilotProc = ptyModule.spawn(cmd, args, {
         name: 'xterm-256color',
         cols: cols,
         rows: rows,
-        cwd: os.homedir(),
+        cwd: pendingCwd,
         env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' }
       })
     } catch (spawnErr) {
@@ -102,11 +115,11 @@ function spawnCopilot(cols, rows) {
   }
 
   // Fallback: spawn with pipe stdio (no real PTY, limited TUI)
-  console.log(`🚀 Spawning (no PTY): ${cmd} ${args.join(' ')}`)
+  console.log(`🚀 Spawning (no PTY): ${cmd} ${args.join(' ')} cwd=${pendingCwd}`)
   copilotProc = spawn(cmd, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: isWindows,
-    cwd: os.homedir(),
+    cwd: pendingCwd,
     env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1', COLUMNS: String(cols), LINES: String(rows) }
   })
   console.log(`🚀 Copilot CLI spawned (PID ${copilotProc.pid}) — no PTY, limited TUI`)
@@ -151,30 +164,43 @@ function resizePty(cols, rows) {
 let pendingCols = DEFAULT_COLS
 let pendingRows = DEFAULT_ROWS
 
-// Simple protocol: first bytes of a message can be a control frame
-// Control frames start with \x00\x00 (null null) followed by a command byte
-// \x00\x00\x01 + 2 bytes cols + 2 bytes rows = resize command (7 bytes)
+// Control frame protocol:
+// \x00\x00\x01 + cols(2BE) + rows(2BE) = resize (7 bytes)
+// \x00\x00\x02 + length(2BE) + utf8_bytes = set cwd (5 + length bytes)
 // Everything else is raw terminal data passed through to the PTY
 function handleData(data) {
-  // Check for resize control frame: \x00\x00\x01 + cols(2) + rows(2)
-  if (data.length >= 7 && data[0] === 0 && data[1] === 0 && data[2] === 1) {
-    const cols = data.readUInt16BE(3)
-    const rows = data.readUInt16BE(5)
+  if (data.length >= 3 && data[0] === 0 && data[1] === 0) {
+    const cmd = data[2]
 
-    if (!copilotProc) {
-      // Copilot not spawned yet — save dimensions and spawn with correct size
-      pendingCols = cols
-      pendingRows = rows
-      spawnCopilot(cols, rows)
-    } else {
-      resizePty(cols, rows)
+    // Resize: \x00\x00\x01 + cols(2) + rows(2)
+    if (cmd === 1 && data.length >= 7) {
+      const cols = data.readUInt16BE(3)
+      const rows = data.readUInt16BE(5)
+
+      if (!copilotProc) {
+        pendingCols = cols
+        pendingRows = rows
+        spawnCopilot(cols, rows)
+      } else {
+        resizePty(cols, rows)
+      }
+
+      if (data.length > 7) handleData(data.slice(7))
+      return
     }
 
-    // If there's more data after the control frame, process it as terminal input
-    if (data.length > 7) {
-      writeToProcess(data.slice(7))
+    // Set CWD: \x00\x00\x02 + length(2BE) + utf8_bytes
+    if (cmd === 2 && data.length >= 5) {
+      const cwdLen = data.readUInt16BE(3)
+      if (data.length >= 5 + cwdLen) {
+        const newCwd = data.slice(5, 5 + cwdLen).toString('utf8')
+        pendingCwd = newCwd
+        console.log(`📁 CWD set to: ${newCwd}`)
+
+        if (data.length > 5 + cwdLen) handleData(data.slice(5 + cwdLen))
+        return
+      }
     }
-    return
   }
 
   // Regular data — spawn with pending dimensions if not yet spawned

@@ -55,3 +55,30 @@ export const REMOTE_PORTS = {
   /** Default local port for ACP if dev tunnel assigns dynamically. */
   ACP_LOCAL: 7777
 } as const
+
+/** Root directory on the Dev Box where agent workspaces are created. */
+export const REMOTE_WORKSPACE_ROOT = 'C:\\Agents'
+
+/**
+ * Build a remote workspace path for an agent session.
+ * Structure: {root}\{sanitized-agent-name}\{leaf-folder}
+ * Example: C:\Agents\lego-1\lego1
+ */
+export function buildRemoteWorkspacePath(
+  agentName: string,
+  localPath: string,
+  root: string = REMOTE_WORKSPACE_ROOT
+): string {
+  // Sanitize agent name for filesystem (replace non-alphanumeric with dash, lowercase)
+  const safeName = agentName
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  
+  // Get leaf folder from localPath (e.g., "d:\git\demos\lego1" → "lego1")
+  const parts = localPath.split(/[\\/]/).filter(Boolean)
+  const leafFolder = parts.length > 0 ? parts[parts.length - 1] : 'workspace'
+  
+  return `${root}\\${safeName}\\${leafFolder}`
+}

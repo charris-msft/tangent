@@ -8,7 +8,7 @@ import type { PtyManager } from '../pty/PtyManager'
 import type { AgentStore } from '../agents/AgentStore'
 import type { AgentProfile, RemoteSessionState } from '@shared/types'
 import type { AcpSessionConfig } from '@shared/acp-types'
-import { REMOTE_PORTS } from '@shared/constants'
+import { REMOTE_PORTS, buildRemoteWorkspacePath } from '@shared/constants'
 import { v4 as uuid } from 'uuid'
 
 interface RemoteSessionHandle {
@@ -189,14 +189,10 @@ export class RemoteSessionManager extends EventEmitter {
 
       console.log(`[Tangent 2] RemoteSessionManager: Syncing workspace outbound...`)
 
-      // Remote workspace path: use explicit repoPath from config, or fall back
-      // to user's home directory (safe default on Windows Dev Boxes)
+      // Build remote workspace path: {root}\{agent-name}\{leaf-folder}
       const connInfo = connectionStatus.connectionInfo
-      const sshUser = connInfo?.sshUser || agentProfile.remote.sshUser || 'azureuser'
-      const defaultRemotePath = process.platform === 'win32'
-        ? `C:\\Users\\${sshUser}`
-        : `/home/${sshUser}`
-      const remoteWorkspacePath = agentProfile.remote.repoPath || defaultRemotePath
+      const remoteWorkspacePath = agentProfile.remote.repoPath
+        || buildRemoteWorkspacePath(agentProfile.name, localPath)
       console.log(`[Tangent 2] RemoteSessionManager: Remote cwd = ${remoteWorkspacePath}`)
       try {
         const syncResult = await this.devBoxConnector.syncWorkspaceOut(
@@ -261,10 +257,21 @@ export class RemoteSessionManager extends EventEmitter {
           console.warn(`[Tangent 2] RemoteSessionManager: PTY socket error: ${err.message}`)
         })
 
-        // Don't send initial newline here — wait for the renderer to send
-        // a terminal:resize (with correct size) which will trigger the bridge
-        // to spawn Copilot at the right dimensions. The resizePty method
-        // sends the control frame, and the bridge lazy-spawns on first data.
+        // Send CWD control frame so bridge spawns Copilot in the right directory
+        // Control frame: \x00\x00\x02 + length(2BE) + utf8_bytes
+        const cwdBytes = Buffer.from(remoteWorkspacePath, 'utf8')
+        const cwdFrame = Buffer.alloc(5 + cwdBytes.length)
+        cwdFrame[0] = 0x00
+        cwdFrame[1] = 0x00
+        cwdFrame[2] = 0x02
+        cwdFrame.writeUInt16BE(cwdBytes.length, 3)
+        cwdBytes.copy(cwdFrame, 5)
+        ptySocket.write(cwdFrame)
+        console.log(`[Tangent 2] RemoteSessionManager: Sent CWD control frame: ${remoteWorkspacePath}`)
+
+        // Don't send initial newline — wait for the renderer to send
+        // a terminal:resize (with correct size) which triggers the bridge
+        // to spawn Copilot at the right dimensions.
 
       } else {
         // ACP mode: ndjson protocol (headless, no TUI)
