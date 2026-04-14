@@ -162,6 +162,90 @@ Edit (or create) `~/.tangent/devbox-config.json`:
 
 ---
 
+## Multiple Dev Boxes
+
+Tangent supports spreading agent workload across several Dev Boxes. Each Dev Box runs `devbox-setup.ps1` independently and gets its own tunnel. The `devBoxes` map in your config holds all of them.
+
+### Setup
+
+1. **Provision each Dev Box** — RDP in and run `devbox-setup.ps1` on each one. Each gets a unique tunnel name (auto-derived from the machine name).
+2. **Note each tunnel name/host** from the setup output.
+3. **Add all entries** to your local `~/.tangent/devbox-config.json`.
+
+### Example: 4 Dev Boxes
+
+```json
+{
+  "devCenterEndpoint": "https://myteam-devcenter.devcenter.azure.com",
+  "projectName": "copilot-dev",
+  "devBoxes": {
+    "charrisdb5": {
+      "tunnelHost": "cpc-charr-d55kk-ssh.devtunnels.ms",
+      "sshUser": "charris"
+    },
+    "charrisdb6": {
+      "tunnelHost": "cpc-charr-a82mm-ssh.devtunnels.ms",
+      "sshUser": "charris"
+    },
+    "charrisdb7": {
+      "tunnelHost": "cpc-charr-f19nn-ssh.devtunnels.ms",
+      "sshUser": "charris"
+    },
+    "charrisdb8": {
+      "tunnelHost": "cpc-charr-k47pp-ssh.devtunnels.ms",
+      "sshUser": "charris"
+    }
+  }
+}
+```
+
+All Dev Boxes share the same `devCenterEndpoint` and `projectName`. Only the `devBoxes` entries differ.
+
+### Per-entry config fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `tunnelHost` | Yes | The `*.devtunnels.ms` hostname from `devbox-setup.ps1` output |
+| `sshUser` | Yes | Windows username on the Dev Box |
+| `tunnelId` | No | Explicit tunnel ID (overrides hostname-based lookup) |
+| `sshPort` | No | Custom SSH port if not 22 |
+| `sshKeyPath` | No | Path to SSH private key (if using key auth instead of tunnel) |
+
+### Concurrent agents on one Dev Box
+
+Multiple agents can connect to the same Dev Box simultaneously — the ACP server on port 3000 supports concurrent sessions. This means you can:
+
+- Run 2–3 Copilot CLI agents on one Dev Box at the same time
+- Use one Dev Box for heavy tasks while another handles lighter ones
+- Scale up to more boxes only when you need the compute headroom
+
+Tangent's DevBoxPicker UI lists all configured Dev Boxes and shows their current state (running, stopped, provisioning). Pick any available box when launching a remote agent.
+
+### Verifying connectivity to all boxes
+
+Test each tunnel independently:
+
+```powershell
+# Check each Dev Box tunnel
+devtunnel connect cpc-charr-d55kk-ssh
+devtunnel connect cpc-charr-a82mm-ssh
+devtunnel connect cpc-charr-f19nn-ssh
+devtunnel connect cpc-charr-k47pp-ssh
+```
+
+Each should show ports 22 and 3000 forwarded. Press `Ctrl+C` between each test.
+
+### Teardown a single Dev Box
+
+To remove one Dev Box from your fleet without affecting the others:
+
+1. **On that Dev Box:** run `.\devbox-teardown.ps1`
+2. **In your config:** remove its entry from the `devBoxes` map
+
+The remaining Dev Boxes continue working unchanged.
+
+---
+
 ## Teardown (Starting Fresh)
 
 If you need to wipe the tunnel config and start over:
