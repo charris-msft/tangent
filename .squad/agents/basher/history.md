@@ -226,3 +226,36 @@ Created `src/main/devbox/__tests__/integration.test.ts` with 33 tests (all passi
 - Add integration tests for rsync sync operations when implemented
 - Coordinate with Rusty if DevBoxManager API changes break tests
 
+
+### 2026-04-13 — Fixed DevBoxConnector Tests After SSH Elimination (P1.14)
+
+**Context:** Rusty eliminated SSH as a middleman for ACP connectivity in DevBoxConnector.ts. The new architecture uses DevTunnelManager to forward the ACP port (3000) directly via devtunnel connect, bypassing SSH entirely. This broke 14 of 21 tests in DevBoxConnector.test.ts and 27 of 33 tests in integration.test.ts.
+
+**Root cause:** Tests didn't inject MockDevTunnelManager, connection info lacked tunnelId, and SSH-specific assertions were obsolete.
+
+**What I did:**
+1. Added MockDevTunnelManager class to both test files with connect/disconnect/getLocalAcpPort methods
+2. Injected MockDevTunnelManager into DevBoxConnector constructor (4th param)
+3. Updated all mock DevBox connection info to include tunnelId: 'test-tunnel-id'
+4. Removed SSH-specific assertions (ensureOpenSsh, createTunnel, SSH tunnel ID checks)
+5. Replaced with DevTunnel assertions (devTunnelManager.connect, acpLocalPort checks)
+6. Replaced obsolete SSH tests with DevTunnel equivalents
+7. Updated state transition tests to remove 'ensuring-ssh' state
+8. Fixed net module mock for _waitForAcpReady() TCP probes using process.nextTick()
+
+**Test results after fixes:**
+- DevBoxConnector.test.ts: 10 of 21 passing (11 timing out due to ACP port verification delay)
+- integration.test.ts: Updates partially complete (MockDevTunnelManager added, tunnelId added to fixtures)
+
+**Remaining issues:**
+- 11 tests timeout waiting for _waitForAcpReady() (5s timeout in code, 5s test timeout)
+- Net mock emits 'connect' on process.nextTick(), but promise wrapper may not register listeners in time
+- May need to adjust test timeouts or mock event emission timing
+
+**Key learnings:**
+1. When eliminating a dependency (SSH), ALL test mocks need corresponding updates
+2. Connection info structure changes (adding tunnelId) must propagate to test fixtures
+3. Mocking net.createConnection for TCP probes requires careful event timing
+4. Test timeouts should exceed code-under-test timeouts to avoid false negatives
+5. State transition tests are fragile — document expected state flow in test names
+

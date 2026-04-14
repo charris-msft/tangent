@@ -45,7 +45,7 @@ export function ProvisioningConsentDialog({
                 <span className="flex-shrink-0">✅</span>
                 <div>
                   <div className="font-semibold">CopilotACP Scheduled Task</div>
-                  <div style={{ color: 'var(--text-muted)' }}>Auto-start on login, port 3000</div>
+                  <div style={{ color: 'var(--text-muted)' }}>Auto-start on login, port 7333</div>
                 </div>
               </li>
 

@@ -366,6 +366,14 @@ if ($portResult -match 'already exists') {
     Write-Success "Port 22 configured on tunnel"
 }
 
+Write-Detail "Configuring ACP port (7333) on tunnel..."
+$portResult = & devtunnel port create $TunnelName -p 7333 2>&1
+if ($portResult -match 'already exists') {
+    Write-Success "Port 7333 already configured on tunnel"
+} else {
+    Write-Success "Port 7333 configured on tunnel"
+}
+
 Write-Detail "Granting tenant access for cross-machine connectivity..."
 & devtunnel access create $TunnelName --tenant 2>&1 | Out-Null
 Write-Success "Tenant access granted (same org users can connect)"

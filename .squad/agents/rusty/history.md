@@ -1132,3 +1132,34 @@ Wired all remote execution managers into `src/main/index.ts` — the final integ
 - graceful degradation: unconfigured manager returns empty arrays, never crashes
 - `mapPowerState()` maps both `powerState` and `provisioningState` to `DevBoxProvisioningState` enum
 - IPC handlers unchanged — same signatures, just real data now
+
+### 2026-04-13: Direct ACP Tunnel (SSH Elimination)
+
+Eliminated SSH as a middleman for ACP connectivity — now using dev tunnel direct port forwarding:
+
+**Architecture Before:**
+```
+local → devtunnel (remote:22 → localhost:port) → SSH → SSH port forward → remote:3000 (ACP)
+```
+
+**Architecture Now:**
+```
+local → devtunnel (remote:3000 → localhost:port) → ACP directly
+```
+
+**Changes:**
+- **assets/devbox-setup.ps1**: Added port 3000 to tunnel creation alongside port 22 (keep SSH for rsync)
+- **DevTunnelManager.ts**: Changed connect() return type from Promise<number> to Promise<DevTunnelPorts> (multi-port parsing)
+  - New interface: DevTunnelPorts with sshPort, cpPort, llPorts Map
+  - Parse ALL port mappings from output (22 and 3000), not just SSH
+  - Added getLocalAcpPort() method
+- **DevBoxConnector.ts**: Skip SSH client, OpenSSH provisioner, SshTunnelManager in primary flow
+  - Direct TCP probe to verify ACP port reachable (_waitForAcpReady())
+  - Store cpLocalPort in ConnectionHandle for AcpClient to use
+  - SSH-related code still present as optional/fallback
+- **constants.ts**: Updated REMOTE_PORTS comments to reflect direct tunnel architecture
+
+**Rationale:** Dev tunnel already provides authenticated (Microsoft tenant), encrypted port forwarding. SSH was redundant. Windows OpenSSH on domain-joined Dev Boxes rejects domain users (REDMOND\charris), causing auth failures.
+
+**Test Impact:** 20 tests now failing due to DevTunnelManager API change. Basher will fix test mocks to expect DevTunnelPorts instead of number.
+

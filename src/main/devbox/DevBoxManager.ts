@@ -9,6 +9,7 @@ import type {
   DevBoxConnectionInfo,
   DevBoxHealthStatus
 } from '../../shared/devbox-types'
+import { REMOTE_PORTS } from '@shared/constants'
 
 const API_VERSION = '2024-02-01'
 const TOKEN_SCOPE = 'https://devcenter.azure.com/.default'
@@ -305,7 +306,7 @@ export class DevBoxManager extends EventEmitter {
         sshKeyPath: tunnelCfg?.sshKeyPath,
         sshConfigured: !!tunnelCfg?.tunnelHost,
         tunnelId,
-        acpPort: 3000
+        acpPort: REMOTE_PORTS.ACP_REMOTE
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

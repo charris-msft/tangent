@@ -8,14 +8,14 @@ Connect your local Tangent 2 to a remote Azure Dev Box using **dev tunnels** for
 Local Machine                          Dev Box
 ┌─────────────┐                     ┌─────────────────┐
 │  Tangent 2   │                     │  CopilotACP     │
-│             │   devtunnel relay    │  (port 3000)    │
-│  :3000 ◄────┼─────────────────────┼──► :3000        │
+│             │   devtunnel relay    │  (port 7333)    │
+│  :7333 ◄────┼─────────────────────┼──► :7333        │
 │  :22   ◄────┼─────────────────────┼──► :22 (sshd)   │
 │             │   (authenticated)    │                 │
 └─────────────┘                     └─────────────────┘
 ```
 
-The `devtunnel` CLI creates an authenticated relay between machines. Both sides log in with the same Microsoft (GitHub) identity — the relay handles the rest. Tangent connects to `localhost:3000` which is forwarded to the Dev Box's ACP port.
+The `devtunnel` CLI creates an authenticated relay between machines. Both sides log in with the same Microsoft (GitHub) identity — the relay handles the rest. Tangent connects to `localhost:7333` which is forwarded to the Dev Box's ACP port.
 
 ---
 
@@ -65,7 +65,7 @@ Optionally pass a custom tunnel name:
 | 2 | Configures SSH authentication (password auth enabled, authorized_keys ready) |
 | 3 | Installs the `devtunnel` CLI via `winget` (or direct download fallback) |
 | 4 | Authenticates with GitHub (`devtunnel user login -g`) — a browser window opens |
-| 5 | Creates a named tunnel with ports **22** (SSH) and **3000** (ACP) |
+| 5 | Creates a named tunnel with ports **22** (SSH) and **7333** (ACP) |
 | 6 | Grants **tenant access** so same-org users can connect (`--tenant`) |
 | 7 | Creates a **scheduled task** (`DevTunnel-<name>`) to auto-host the tunnel at logon |
 
@@ -123,7 +123,7 @@ You should see output showing both ports forwarded:
 ```
 Connected to tunnel: cpc-charr-d55kk-ssh
   Port 22  → localhost:<local-port>
-  Port 3000 → localhost:<local-port>
+  Port 7333 → localhost:<local-port>
 ```
 
 Press `Ctrl+C` to disconnect after verifying.
@@ -213,7 +213,7 @@ All Dev Boxes share the same `devCenterEndpoint` and `projectName`. Only the `de
 
 ### Concurrent agents on one Dev Box
 
-Multiple agents can connect to the same Dev Box simultaneously — the ACP server on port 3000 supports concurrent sessions. This means you can:
+Multiple agents can connect to the same Dev Box simultaneously — the ACP server on port 7333 supports concurrent sessions. This means you can:
 
 - Run 2–3 Copilot CLI agents on one Dev Box at the same time
 - Use one Dev Box for heavy tasks while another handles lighter ones
@@ -233,7 +233,7 @@ devtunnel connect cpc-charr-f19nn-ssh
 devtunnel connect cpc-charr-k47pp-ssh
 ```
 
-Each should show ports 22 and 3000 forwarded. Press `Ctrl+C` between each test.
+Each should show ports 22 and 7333 forwarded. Press `Ctrl+C` between each test.
 
 ### Teardown a single Dev Box
 
@@ -326,13 +326,13 @@ Get-Command devtunnel -ErrorAction SilentlyContinue
 
 ---
 
-### Port 3000 not showing in `devtunnel connect` output
+### Port 7333 not showing in `devtunnel connect` output
 
 **Cause:** The ACP port wasn't added to the tunnel.
 
 **Fix** (on the Dev Box):
 ```powershell
-devtunnel port create <tunnel-name> -p 3000
+devtunnel port create <tunnel-name> -p 7333
 ```
 
 Verify:

@@ -2,6 +2,7 @@
 // @ts-ignore - ssh2 has no type definitions
 import type { Client } from 'ssh2'
 import { Socket, createConnection } from 'net'
+import { REMOTE_PORTS } from '@shared/constants'
 
 interface SshExecResult {
   stdout: string
@@ -71,7 +72,7 @@ export class AcpProvisioner {
         }
       }
 
-      const command = `powershell.exe -Command "$action = New-ScheduledTaskAction -Execute 'copilot' -Argument '--acp --port 3000 --allow-all-tools'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); Register-ScheduledTask -TaskName 'CopilotACP' -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest -Force | Out-Null"`
+      const command = `powershell.exe -Command "$action = New-ScheduledTaskAction -Execute 'copilot' -Argument '--acp --port ${REMOTE_PORTS.ACP_REMOTE} --allow-all-tools'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1); Register-ScheduledTask -TaskName 'CopilotACP' -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest -Force | Out-Null"`
 
       const result = await this.execCommand(sshClient, command)
 
@@ -129,7 +130,7 @@ export class AcpProvisioner {
     }
   }
 
-  async ensureAcpService(sshClient: Client, port = 3000): Promise<boolean> {
+  async ensureAcpService(sshClient: Client, port = REMOTE_PORTS.ACP_REMOTE): Promise<boolean> {
     const isProvisioned = await this.checkProvisioned(sshClient)
     if (isProvisioned) {
       const isResponsive = await this.verifyAcpService(sshClient, port)

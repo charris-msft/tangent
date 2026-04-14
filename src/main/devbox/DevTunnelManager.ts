@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
 import { spawn, ChildProcess } from 'child_process'
+import { REMOTE_PORTS } from '@shared/constants'
 
 interface DevTunnelConnection {
   tunnelId: string
@@ -9,6 +10,12 @@ interface DevTunnelConnection {
   error?: string
 }
 
+export interface DevTunnelPorts {
+  sshPort?: number      // local port mapped to remote:22
+  acpPort?: number      // local port mapped to remote:7333
+  allPorts: Map<number, number>  // remote → local
+}
+
 /**
  * Manages `devtunnel connect` child processes for authenticated tunnel access.
  * 
@@ -16,9 +23,11 @@ interface DevTunnelConnection {
  * are Copilot users, we standardize on GitHub auth (`devtunnel user login -g`).
  * 
  * `devtunnel connect <tunnelId>` maps remote ports to local ports:
- *   Remote port 22 → localhost:<assigned-port>
+ *   Remote port 22 → localhost:<assigned-port>   (SSH, optional)
+ *   Remote port 7333 → localhost:<assigned-port> (ACP direct)
  * 
- * After connecting, SSH to localhost:<assigned-port> instead of the tunnel hostname.
+ * Primary connectivity is via the direct ACP port. SSH is available for
+ * optional workspace sync (rsync) but not required for agent execution.
  */
 export class DevTunnelManager extends EventEmitter {
   private connections = new Map<string, DevTunnelConnection>()
@@ -26,20 +35,23 @@ export class DevTunnelManager extends EventEmitter {
 
   /**
    * Connect to a dev tunnel by ID. Spawns `devtunnel connect` and parses
-   * the local port mapping from its output.
+   * all local port mappings from its output.
    * 
-   * @returns Promise resolving to the local port mapped to remote port 22 (SSH)
+   * @returns Promise resolving to all port mappings (SSH and ACP)
    */
-  async connect(tunnelId: string): Promise<number> {
+  async connect(tunnelId: string): Promise<DevTunnelPorts> {
     if (this.disposed) throw new Error('DevTunnelManager is disposed')
 
     const existing = this.connections.get(tunnelId)
-    if (existing?.status === 'connected') {
-      const sshPort = existing.localPorts.get(22)
-      if (sshPort) return sshPort
+    if (existing?.status === 'connected' && existing.localPorts.size > 0) {
+      return {
+        sshPort: existing.localPorts.get(22),
+        acpPort: existing.localPorts.get(REMOTE_PORTS.ACP_REMOTE),
+        allPorts: new Map(existing.localPorts)
+      }
     }
 
-    return new Promise<number>((resolve, reject) => {
+    return new Promise<DevTunnelPorts>((resolve, reject) => {
       const timeoutMs = 30000
       let resolved = false
 
@@ -69,50 +81,66 @@ export class DevTunnelManager extends EventEmitter {
       }, timeoutMs)
 
       let outputBuffer = ''
+      const portsNeeded = new Set([22, REMOTE_PORTS.ACP_REMOTE])
+      const portsFound = new Set<number>()
 
       proc.stdout?.on('data', (data: Buffer) => {
         const text = data.toString()
         outputBuffer += text
         console.log(`[Tangent 2] DevTunnel stdout: ${text.trim()}`)
 
-        // Parse port mappings from output
+        // Parse all port mappings from output
         // Format varies but typically: "Port 22 is available at localhost:12345"
         // or "Forwarding port 22 to localhost:12345"
         // or table format with local port assignments
-        const portMatch = text.match(/(?:port\s+)?22\s+.*?localhost:(\d+)/i)
-          || text.match(/localhost:(\d+)\s+.*?(?:port\s+)?22/i)
-          || text.match(/(\d{4,5}).*?→.*?22/i)
-          || text.match(/22\s*→\s*.*?:(\d+)/i)
+        // Match pattern: remote port → localhost:local port
+        const portPatterns = [
+          /(?:port\s+)?(\d+)\s+.*?localhost:(\d+)/gi,
+          /localhost:(\d+)\s+.*?(?:port\s+)?(\d+)/gi,
+          /(\d{4,5})\s*→\s*(\d+)/gi,
+          /(\d+)\s*→\s*.*?:(\d+)/gi
+        ]
 
-        if (portMatch && !resolved) {
-          const localPort = parseInt(portMatch[1], 10)
-          conn.localPorts.set(22, localPort)
+        for (const pattern of portPatterns) {
+          let match
+          while ((match = pattern.exec(text)) !== null) {
+            const remotePort = parseInt(match[1], 10)
+            const localPort = parseInt(match[2], 10)
+            
+            // Check if this is a port we care about
+            if (portsNeeded.has(remotePort)) {
+              conn.localPorts.set(remotePort, localPort)
+              portsFound.add(remotePort)
+              console.log(`[Tangent 2] DevTunnel: port ${remotePort} → localhost:${localPort}`)
+            }
+          }
+        }
+
+        // Also try inverse pattern (local:remote)
+        const inverseMatch = text.match(/localhost:(\d+)\s+.*?(?:port\s+)?(\d+)/i)
+        if (inverseMatch) {
+          const localPort = parseInt(inverseMatch[1], 10)
+          const remotePort = parseInt(inverseMatch[2], 10)
+          if (portsNeeded.has(remotePort) && !conn.localPorts.has(remotePort)) {
+            conn.localPorts.set(remotePort, localPort)
+            portsFound.add(remotePort)
+            console.log(`[Tangent 2] DevTunnel: port ${remotePort} → localhost:${localPort}`)
+          }
+        }
+
+        // If we have at least the ACP port, we're good to resolve
+        if (!resolved && conn.localPorts.has(REMOTE_PORTS.ACP_REMOTE)) {
           conn.status = 'connected'
           resolved = true
           clearTimeout(timeout)
-          console.log(`[Tangent 2] DevTunnel: SSH port 22 mapped to localhost:${localPort}`)
-          this.emit('tunnel:connected', { tunnelId, localPort })
-          resolve(localPort)
-        }
-
-        // Also check for "Connected" or "ready" signals without explicit port mapping
-        if (!resolved && (text.match(/connected/i) || text.match(/ready/i))) {
-          // If we see connected but no port mapping, the port is likely the same number
-          // devtunnel typically maps remote:22 → localhost:22 if available
-          if (!conn.localPorts.has(22)) {
-            // Try to find any port number in the accumulated output
-            const anyPort = outputBuffer.match(/localhost:(\d+)/i)
-            if (anyPort) {
-              const localPort = parseInt(anyPort[1], 10)
-              conn.localPorts.set(22, localPort)
-              conn.status = 'connected'
-              resolved = true
-              clearTimeout(timeout)
-              console.log(`[Tangent 2] DevTunnel: SSH mapped to localhost:${localPort} (inferred)`)
-              this.emit('tunnel:connected', { tunnelId, localPort })
-              resolve(localPort)
-            }
+          const result: DevTunnelPorts = {
+            sshPort: conn.localPorts.get(22),
+            acpPort: conn.localPorts.get(REMOTE_PORTS.ACP_REMOTE),
+            allPorts: new Map(conn.localPorts)
           }
+          console.log(`[Tangent 2] DevTunnel: Connected with ${conn.localPorts.size} port(s)`)
+          this.emit('tunnel:connected', { tunnelId, ports: result })
+          resolve(result)
         }
       })
 
@@ -179,6 +207,13 @@ export class DevTunnelManager extends EventEmitter {
    */
   getLocalSshPort(tunnelId: string): number | undefined {
     return this.connections.get(tunnelId)?.localPorts.get(22)
+  }
+
+  /**
+   * Get the local ACP port for a connected tunnel.
+   */
+  getLocalAcpPort(tunnelId: string): number | undefined {
+    return this.connections.get(tunnelId)?.localPorts.get(REMOTE_PORTS.ACP_REMOTE)
   }
 
   /**

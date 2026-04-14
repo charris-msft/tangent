@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { createConnection as netCreateConnection } from 'net'
 import type { DevBoxManager } from './DevBoxManager'
 import type { SshTunnelManager } from './SshTunnelManager'
 import type { OpenSshProvisioner } from './OpenSshProvisioner'
@@ -27,6 +28,7 @@ interface ConnectionHandle {
   state: ConnectionState
   tunnelId?: string
   connectionInfo?: DevBoxConnectionInfo
+  acpLocalPort?: number  // The local port forwarded to remote ACP
   error?: string
   startedAt: number
   readyAt?: number
@@ -129,54 +131,40 @@ export class DevBoxConnector extends EventEmitter {
 
       console.log(`[Tangent 2] Dev Box ${devBoxName} tunnel: ${devBox.connectionInfo.tunnelId ?? devBox.connectionInfo.sshHost} as ${devBox.connectionInfo.sshUser}`)
 
-      // Step 2: Connect via devtunnel CLI (maps remote SSH port to localhost)
-      this._updateState(connection, 'ensuring-ssh')
-      this.emit('connection:provisioning', connectionId)
-
-      let sshHost = devBox.connectionInfo.sshHost
-      let sshPort = devBox.connectionInfo.sshPort
-
-      // If we have a DevTunnelManager and a tunnel ID, use `devtunnel connect`
-      // to get authenticated access through the tunnel
-      if (this.devTunnelManager && devBox.connectionInfo.tunnelId) {
-        console.log(`[Tangent 2] Using devtunnel connect for ${devBox.connectionInfo.tunnelId}...`)
-        const localSshPort = await this.devTunnelManager.connect(devBox.connectionInfo.tunnelId)
-        sshHost = '127.0.0.1'
-        sshPort = localSshPort
-        console.log(`[Tangent 2] DevTunnel mapped SSH to localhost:${localSshPort}`)
-      }
-
-      // Create a modified connection info pointing to the local tunnel port
-      const tunnelConnInfo = { ...devBox.connectionInfo, sshHost, sshPort }
-
-      const sshKeyPath = sshConfig?.keyPath ?? devBox.connectionInfo.sshKeyPath
-      const sshClient = await this._createSshClient(tunnelConnInfo, sshKeyPath)
-      const sshReady = await this.openSshProvisioner.ensureOpenSsh(sshClient)
-      sshClient.end()
-
-      if (!sshReady) {
-        throw new Error('Failed to provision OpenSSH on Dev Box')
-      }
-
-      // Step 3: Establish SSH tunnel (for ACP port forwarding over the devtunnel)
+      // Step 2: Connect via devtunnel CLI (direct ACP port forwarding)
       this._updateState(connection, 'tunneling')
       this.emit('connection:tunneling', connectionId)
 
-      const acpLocalPort = sshConfig?.localPort || REMOTE_PORTS.ACP_LOCAL
-      const acpRemotePort = sshConfig?.remotePort || devBox.connectionInfo.acpPort || REMOTE_PORTS.ACP_REMOTE
-      const sshTunnelId = this.sshTunnelManager.createTunnel(
-        tunnelConnInfo,
-        acpLocalPort,
-        acpRemotePort,
-        sshKeyPath
-      )
-      connection.tunnelId = sshTunnelId
-      connection.connectionInfo = tunnelConnInfo
+      let acpLocalPort: number | undefined
 
-      // Step 4: Verify tunnel health
+      // If we have a DevTunnelManager and a tunnel ID, use `devtunnel connect`
+      // to get authenticated direct port forwarding to ACP (no SSH middleman)
+      if (this.devTunnelManager && devBox.connectionInfo.tunnelId) {
+        console.log(`[Tangent 2] Using devtunnel connect for ${devBox.connectionInfo.tunnelId}...`)
+        const tunnelPorts = await this.devTunnelManager.connect(devBox.connectionInfo.tunnelId)
+        
+        acpLocalPort = tunnelPorts.acpPort
+        if (!acpLocalPort) {
+          throw new Error(
+            `Dev tunnel connected but ACP port (${REMOTE_PORTS.ACP_REMOTE}) not mapped. ` +
+            `Run the setup script on your Dev Box to configure port ${REMOTE_PORTS.ACP_REMOTE}.`
+          )
+        }
+
+        console.log(`[Tangent 2] DevTunnel mapped ACP port ${REMOTE_PORTS.ACP_REMOTE} → localhost:${acpLocalPort}`)
+        if (tunnelPorts.sshPort) {
+          console.log(`[Tangent 2] DevTunnel mapped SSH port 22 → localhost:${tunnelPorts.sshPort} (available for rsync)`)
+        }
+      } else {
+        throw new Error('DevTunnelManager not configured or tunnel ID missing')
+      }
+
+      connection.acpLocalPort = acpLocalPort
+
+      // Step 3: Verify ACP port is reachable
       this._updateState(connection, 'verifying')
 
-      await this._waitForTunnelReady(sshTunnelId, 5000) // 5s timeout
+      await this._waitForAcpReady(acpLocalPort, 5000) // 5s timeout
 
       // Step 5: Ready!
       this._updateState(connection, 'ready')
@@ -327,28 +315,42 @@ export class DevBoxConnector extends EventEmitter {
     })
   }
 
-  private async _waitForTunnelReady(tunnelId: string, timeoutMs: number): Promise<void> {
+  private async _waitForAcpReady(localPort: number, timeoutMs: number): Promise<void> {
     const startTime = Date.now()
-    const pollInterval = 100 // 100ms for faster testing
+    const pollInterval = 500 // Poll every 500ms
 
     while (Date.now() - startTime < timeoutMs) {
-      const status = this.sshTunnelManager.getTunnelStatus(tunnelId)
-
-      if (!status) {
-        throw new Error('Tunnel status unavailable')
-      }
-
-      if (status.status === 'connected') {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const socket = netCreateConnection({ 
+            port: localPort, 
+            host: '127.0.0.1',
+            timeout: 1000 
+          })
+          
+          socket.on('connect', () => {
+            socket.end()
+            resolve()
+          })
+          
+          socket.on('error', (err: Error) => {
+            reject(err)
+          })
+          
+          socket.on('timeout', () => {
+            socket.destroy()
+            reject(new Error('Socket timeout'))
+          })
+        })
+        
+        console.log(`[Tangent 2] ACP port ${localPort} is reachable`)
         return
+      } catch (err) {
+        // Port not ready yet, continue polling
+        await new Promise((resolve) => setTimeout(resolve, pollInterval))
       }
-
-      if (status.status === 'error') {
-        throw new Error(`Tunnel error: ${status.error || 'unknown'}`)
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, pollInterval))
     }
 
-    throw new Error('Timeout waiting for tunnel to be ready')
+    throw new Error(`Timeout waiting for ACP port ${localPort} to be ready`)
   }
 }

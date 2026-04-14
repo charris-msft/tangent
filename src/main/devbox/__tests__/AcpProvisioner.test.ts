@@ -286,7 +286,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.verifyAcpService(mockSshClient, 3000)
+      const result = await provisioner.verifyAcpService(mockSshClient, 7333)
       expect(result).toBe(true)
       expect(mockSshClient.exec).toHaveBeenCalledWith(
         expect.stringContaining('Test-NetConnection'),
@@ -314,7 +314,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.verifyAcpService(mockSshClient, 3000)
+      const result = await provisioner.verifyAcpService(mockSshClient, 7333)
       expect(result).toBe(true)
       expect(mockSshClient.exec).toHaveBeenCalledTimes(3)
     }, 15000) // Longer timeout for retry delays
@@ -337,7 +337,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.verifyAcpService(mockSshClient, 3000)
+      const result = await provisioner.verifyAcpService(mockSshClient, 7333)
       expect(result).toBe(false)
       expect(mockSshClient.exec).toHaveBeenCalledTimes(10) // Max attempts
     }, 15000) // Longer timeout for retry delays
@@ -347,7 +347,7 @@ describe('AcpProvisioner', () => {
         callback(new Error('Network error'))
       })
 
-      const result = await provisioner.verifyAcpService(mockSshClient, 3000)
+      const result = await provisioner.verifyAcpService(mockSshClient, 7333)
       expect(result).toBe(false)
     })
 
@@ -405,7 +405,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.ensureAcpService(mockSshClient, 3000)
+      const result = await provisioner.ensureAcpService(mockSshClient, 7333)
       expect(result).toBe(true)
       expect(mockSshClient.exec).toHaveBeenCalledTimes(2) // check + verify
     })
@@ -434,7 +434,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.ensureAcpService(mockSshClient, 3000)
+      const result = await provisioner.ensureAcpService(mockSshClient, 7333)
       expect(result).toBe(true)
       expect(mockSshClient.exec.mock.calls.some((call: any[]) => 
         call[0].includes('Register-ScheduledTask')
@@ -468,7 +468,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.ensureAcpService(mockSshClient, 3000)
+      const result = await provisioner.ensureAcpService(mockSshClient, 7333)
       expect(result).toBe(true)
       expect(mockSshClient.exec.mock.calls.some((call: any[]) => 
         call[0].includes('Register-ScheduledTask')
@@ -494,7 +494,7 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.ensureAcpService(mockSshClient, 3000)
+      const result = await provisioner.ensureAcpService(mockSshClient, 7333)
       expect(result).toBe(false)
     })
 
@@ -518,11 +518,11 @@ describe('AcpProvisioner', () => {
         callback(null, stream)
       })
 
-      const result = await provisioner.ensureAcpService(mockSshClient, 3000)
+      const result = await provisioner.ensureAcpService(mockSshClient, 7333)
       expect(result).toBe(false)
     }, 25000) // Longer timeout for multiple retries
 
-    it('uses default port 3000 when not specified', async () => {
+    it('uses default port 7333 when not specified', async () => {
       mockSshClient.exec.mockImplementation((cmd: string, callback: any) => {
         const stream = {
           on: vi.fn((event, handler) => {
@@ -547,7 +547,7 @@ describe('AcpProvisioner', () => {
       const result = await provisioner.ensureAcpService(mockSshClient)
       expect(result).toBe(true)
       expect(mockSshClient.exec).toHaveBeenCalledWith(
-        expect.stringContaining('Port 3000'),
+        expect.stringContaining('Port 7333'),
         expect.any(Function)
       )
     })

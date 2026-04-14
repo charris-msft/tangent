@@ -47,7 +47,7 @@ export interface DevBoxConnectionInfo {
   sshConfigured: boolean
   /** Dev tunnel ID for `devtunnel connect` (e.g. "cpc-charr-d55kk-ssh"). */
   tunnelId?: string
-  /** ACP port on the Dev Box for Copilot protocol (default 3000). */
+  /** ACP port on the Dev Box for Copilot protocol (default 7333). */
   acpPort?: number
 }
 

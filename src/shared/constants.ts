@@ -38,8 +38,8 @@ export const ZOOM = {
 
 // Remote Dev Box / ACP port configuration
 export const REMOTE_PORTS = {
-  /** Port ACP server listens on inside the Dev Box (remote side of SSH tunnel). */
-  ACP_REMOTE: 3000,
-  /** Local port that forwards to the remote ACP port via SSH tunnel. */
+  /** Port ACP server listens on inside the Dev Box. */
+  ACP_REMOTE: 7333,
+  /** Default local port for ACP if dev tunnel assigns dynamically. */
   ACP_LOCAL: 7777
 } as const
