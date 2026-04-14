@@ -239,7 +239,7 @@ export class DevBoxManager extends EventEmitter {
 
   /**
    * List all Dev Boxes for the current user in the configured project.
-   * Returns empty array when not configured (does not crash).
+   * Falls back to locally configured Dev Boxes when the API is unreachable.
    */
   async listDevBoxes(): Promise<DevBoxResource[]> {
     if (!this.isConfigured) return []
@@ -251,9 +251,42 @@ export class DevBoxManager extends EventEmitter {
       return (data.value ?? []).map((raw) => this.mapDevBox(raw))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn('[Tangent] Failed to list dev boxes:', message)
+      console.warn('[Tangent] Failed to list dev boxes from API:', message)
+
+      // Fallback: return Dev Boxes from local config (offline mode)
+      const configBoxes = this.listConfiguredDevBoxes()
+      if (configBoxes.length > 0) {
+        console.log(`[Tangent] Using ${configBoxes.length} Dev Box(es) from local config (API unreachable)`)
+        return configBoxes
+      }
+
       throw new Error(`Failed to list Dev Boxes: ${message}`)
     }
+  }
+
+  /**
+   * List Dev Boxes from the local config file (no API call).
+   * Returns entries from the devBoxes map with tunnel info and "Unknown" state.
+   * Used as fallback when the Dev Center API is unreachable (e.g., no VPN).
+   */
+  listConfiguredDevBoxes(): DevBoxResource[] {
+    if (!this.config?.devBoxes) return []
+    return Object.entries(this.config.devBoxes).map(([name, tunnelCfg]) => ({
+      id: name,
+      name,
+      projectName: this.config!.projectName,
+      poolName: '',
+      state: 'Running' as const,  // Assume running if configured locally
+      osType: 'Windows' as const,
+      location: 'local-config',
+      connectionInfo: {
+        sshHost: tunnelCfg.tunnelHost,
+        sshPort: tunnelCfg.sshPort ?? 22,
+        sshUser: tunnelCfg.sshUser ?? 'azureuser',
+        sshConfigured: true,
+        tunnelId: tunnelCfg.tunnelName ?? tunnelCfg.tunnelId
+      }
+    }))
   }
 
   /**

@@ -211,12 +211,23 @@ export class RemoteSessionManager extends EventEmitter {
       // Use the actual tunneled local port from the connector, not the static constant
       const acpLocalPort = connectionStatus.acpLocalPort ?? REMOTE_PORTS.ACP_LOCAL
       console.log(`[Tangent 2] RemoteSessionManager: ACP local port = ${acpLocalPort}`)
-      await this.acpClient.connect({
-        host: '127.0.0.1',
-        port: acpLocalPort,
-        username: connInfo?.sshUser ?? 'azureuser',
-        acpPort: acpLocalPort
-      })
+      try {
+        await this.acpClient.connect({
+          host: '127.0.0.1',
+          port: acpLocalPort,
+          username: connInfo?.sshUser ?? 'azureuser',
+          acpPort: acpLocalPort
+        })
+      } catch (acpErr) {
+        const acpMsg = acpErr instanceof Error ? acpErr.message : String(acpErr)
+        if (acpMsg.includes('ECONNREFUSED')) {
+          throw new Error(
+            `No ACP service on Dev Box (port ${acpLocalPort}). ` +
+            `Run 'node acp-test-server.js' on the Dev Box or start the Copilot agent runtime.`
+          )
+        }
+        throw acpErr
+      }
 
       // Step 5: Create ACP session
       this._updateState(handle, 'verifying-acp')

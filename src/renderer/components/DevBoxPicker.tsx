@@ -2,9 +2,9 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import type { DevBoxResource } from '@shared/devbox-types'
 import { DEVBOX_API } from '@shared/constants'
 
-/** Check whether an error message indicates a retryable failure (timeout or server error). */
+/** Check whether an error message indicates a retryable failure (timeout, server error, or network). */
 function isRetryableError(message: string): boolean {
-  return /timed out|timeout|502|503|504|gateway/i.test(message)
+  return /timed out|timeout|502|503|504|gateway|fetch failed|network|ECONNRESET/i.test(message)
 }
 
 interface RetryStatus {
@@ -224,7 +224,7 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
                         Project: {devBox.projectName}
                       </div>
                       <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {devBox.location} • {devBox.osType}
+                        {devBox.location === 'local-config' ? '📋 From config (API offline)' : `${devBox.location} • ${devBox.osType}`}
                       </div>
                     </div>
                   </div>
