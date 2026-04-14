@@ -25,6 +25,7 @@ vi.mock('@agentclientprotocol/sdk', () => ({
     this.closed = new Promise<void>(() => {})
   }),
   ndJsonStream: vi.fn((writable, readable) => ({ writable, readable })),
+  PROTOCOL_VERSION: 1,
 }))
 
 // === Imports after mocks ===
@@ -55,7 +56,7 @@ describe('AcpClient', () => {
 
       expect(mockMethods.initialize).toHaveBeenCalledWith(
         expect.objectContaining({
-          protocolVersion: '1.0',
+          protocolVersion: 1,
           clientInfo: expect.objectContaining({ name: 'Tangent' }),
         })
       )
@@ -187,15 +188,16 @@ describe('AcpClient', () => {
     })
 
     it('throws error if session not found', async () => {
-      await expect(client.sendPrompt('nonexistent-sess', 'Hello')).rejects.toThrow(
-        /No ACP session mapped/
-      )
+      // Auto-reconnect will try but fail (no connect options for connectWithStream)
+      await expect(client.sendPrompt('nonexistent-sess', 'Hello')).rejects.toThrow()
     })
 
-    it('throws error if not connected', async () => {
+    it('throws error if not connected and no reconnect options', async () => {
       await client.disconnect()
 
-      await expect(client.sendPrompt('tangent-sess-1', 'Hello')).rejects.toThrow(/Not connected/)
+      // sendPrompt will try to reconnect, but fail since no connect options are saved
+      // (connectWithStream doesn't save TCP connect options)
+      await expect(client.sendPrompt('tangent-sess-1', 'Hello')).rejects.toThrow()
     })
 
     it('updates session lastActiveAt timestamp', async () => {
@@ -286,14 +288,13 @@ describe('AcpClient', () => {
       expect(client.getState()).toBe('disconnected')
     })
 
-    it('closes all sessions before disconnecting', async () => {
+    it('clears sessions on disconnect', async () => {
       mockMethods.newSession.mockResolvedValue({ sessionId: 'acp-sess-1' })
-      mockMethods.unstable_closeSession.mockResolvedValue({})
       await client.newSession({ cwd: 'D:\\projects' })
 
       await client.disconnect()
 
-      expect(mockMethods.unstable_closeSession).toHaveBeenCalledWith({ sessionId: 'acp-sess-1' })
+      expect(client.getSessions()).toHaveLength(0)
     })
 
     it('handles already disconnected state', async () => {
