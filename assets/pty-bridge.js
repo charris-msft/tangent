@@ -147,7 +147,11 @@ function resizePty(cols, rows) {
   }
 }
 
-// Simple protocol: first 4 bytes of a message can be a control frame
+// Track the desired terminal size (updated by resize control frames)
+let pendingCols = DEFAULT_COLS
+let pendingRows = DEFAULT_ROWS
+
+// Simple protocol: first bytes of a message can be a control frame
 // Control frames start with \x00\x00 (null null) followed by a command byte
 // \x00\x00\x01 + 2 bytes cols + 2 bytes rows = resize command (7 bytes)
 // Everything else is raw terminal data passed through to the PTY
@@ -156,7 +160,16 @@ function handleData(data) {
   if (data.length >= 7 && data[0] === 0 && data[1] === 0 && data[2] === 1) {
     const cols = data.readUInt16BE(3)
     const rows = data.readUInt16BE(5)
-    resizePty(cols, rows)
+
+    if (!copilotProc) {
+      // Copilot not spawned yet — save dimensions and spawn with correct size
+      pendingCols = cols
+      pendingRows = rows
+      spawnCopilot(cols, rows)
+    } else {
+      resizePty(cols, rows)
+    }
+
     // If there's more data after the control frame, process it as terminal input
     if (data.length > 7) {
       writeToProcess(data.slice(7))
@@ -164,6 +177,10 @@ function handleData(data) {
     return
   }
 
+  // Regular data — spawn with pending dimensions if not yet spawned
+  if (!copilotProc) {
+    spawnCopilot(pendingCols, pendingRows)
+  }
   writeToProcess(data)
 }
 
@@ -198,12 +215,8 @@ const server = net.createServer((socket) => {
   console.log(`✅ Client connected from ${socket.remoteAddress}:${socket.remotePort}` +
     (reconnecting ? ' (reconnected to existing Copilot)' : ' (fresh)'))
 
-  // Socket → Copilot PTY
+  // Socket → Copilot PTY (handleData manages lazy spawn with correct dimensions)
   socket.on('data', (data) => {
-    if (!copilotProc) {
-      // Lazy spawn on first data
-      spawnCopilot(DEFAULT_COLS, DEFAULT_ROWS)
-    }
     handleData(data)
   })
 

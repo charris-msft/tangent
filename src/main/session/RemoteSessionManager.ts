@@ -261,8 +261,10 @@ export class RemoteSessionManager extends EventEmitter {
           console.warn(`[Tangent 2] RemoteSessionManager: PTY socket error: ${err.message}`)
         })
 
-        // Send initial newline to trigger Copilot spawn on the bridge
-        ptySocket.write('\n')
+        // Don't send initial newline here — wait for the renderer to send
+        // a terminal:resize (with correct size) which will trigger the bridge
+        // to spawn Copilot at the right dimensions. The resizePty method
+        // sends the control frame, and the bridge lazy-spawns on first data.
 
       } else {
         // ACP mode: ndjson protocol (headless, no TUI)
