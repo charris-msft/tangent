@@ -42,80 +42,98 @@ try {
 function spawnCopilot(cols, rows) {
   const isWindows = process.platform === 'win32'
 
-  // Find copilot binary
-  let cmd
+  // Find copilot binary — node-pty needs the FULL path on Windows
+  let cmd, args
   try {
     const { execSync } = require('child_process')
-    execSync(isWindows ? 'where copilot' : 'which copilot', { stdio: 'ignore' })
-    cmd = 'copilot'
+    const which = execSync(isWindows ? 'where copilot' : 'which copilot', { encoding: 'utf8' }).trim()
+    // 'where' can return multiple lines; take the first
+    cmd = which.split(/\r?\n/)[0].trim()
+    args = []
   } catch {
-    cmd = isWindows ? 'npx.cmd' : 'npx'
+    // Fall back to npx
+    const { execSync } = require('child_process')
+    try {
+      const npxPath = execSync(isWindows ? 'where npx.cmd' : 'which npx', { encoding: 'utf8' }).trim().split(/\r?\n/)[0].trim()
+      cmd = npxPath
+    } catch {
+      cmd = isWindows ? 'npx.cmd' : 'npx'
+    }
+    args = ['--yes', '@github/copilot']
   }
-
-  const args = cmd.includes('npx') ? ['--yes', '@github/copilot'] : []
 
   if (ptyModule) {
     // Spawn in a real PTY — this gives full TUI support
     console.log(`🚀 Spawning PTY: ${cmd} ${args.join(' ')} (${cols}x${rows})`)
-    copilotProc = ptyModule.spawn(cmd, args, {
-      name: 'xterm-256color',
-      cols: cols,
-      rows: rows,
-      cwd: os.homedir(),
-      env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' }
-    })
-    console.log(`🚀 Copilot CLI spawned in PTY (PID ${copilotProc.pid})`)
-
-    // PTY output → current socket
-    copilotProc.onData((data) => {
-      if (currentSocket && !currentSocket.destroyed) {
-        currentSocket.write(data)
-      }
-    })
-
-    copilotProc.onExit(({ exitCode }) => {
-      console.log(`🔌 Copilot process exited (code ${exitCode})`)
+    try {
+      copilotProc = ptyModule.spawn(cmd, args, {
+        name: 'xterm-256color',
+        cols: cols,
+        rows: rows,
+        cwd: os.homedir(),
+        env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' }
+      })
+    } catch (spawnErr) {
+      console.error(`❌ PTY spawn failed: ${spawnErr.message}`)
+      console.error(`   cmd: "${cmd}", args: ${JSON.stringify(args)}`)
+      console.error(`   Falling back to pipe mode...`)
       copilotProc = null
-      if (currentSocket && !currentSocket.destroyed) currentSocket.destroy()
-      currentSocket = null
-    })
-  } else {
-    // Fallback: spawn with pipe stdio (no real PTY, but still works for basic I/O)
-    console.log(`🚀 Spawning (no PTY): ${cmd} ${args.join(' ')}`)
-    copilotProc = spawn(cmd, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: isWindows,
-      cwd: os.homedir(),
-      env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1', COLUMNS: String(cols), LINES: String(rows) }
-    })
-    console.log(`🚀 Copilot CLI spawned (PID ${copilotProc.pid}) — no PTY, limited TUI`)
+      // Fall through to pipe-based fallback below
+    }
 
-    // stdout → current socket
-    copilotProc.stdout.on('data', (data) => {
-      if (currentSocket && !currentSocket.destroyed) {
-        currentSocket.write(data)
-      }
-    })
+    if (copilotProc) {
+      console.log(`🚀 Copilot CLI spawned in PTY (PID ${copilotProc.pid})`)
 
-    // stderr → current socket (TUI apps often write to stderr)
-    copilotProc.stderr.on('data', (data) => {
-      if (currentSocket && !currentSocket.destroyed) {
-        currentSocket.write(data)
-      }
-    })
+      // PTY output → current socket
+      copilotProc.onData((data) => {
+        if (currentSocket && !currentSocket.destroyed) {
+          currentSocket.write(data)
+        }
+      })
 
-    copilotProc.on('close', (code) => {
-      console.log(`🔌 Copilot process exited (code ${code})`)
-      copilotProc = null
-      if (currentSocket && !currentSocket.destroyed) currentSocket.destroy()
-      currentSocket = null
-    })
-
-    copilotProc.on('error', (err) => {
-      console.error(`❌ Failed to spawn copilot: ${err.message}`)
-      copilotProc = null
-    })
+      copilotProc.onExit(({ exitCode }) => {
+        console.log(`🔌 Copilot process exited (code ${exitCode})`)
+        copilotProc = null
+        if (currentSocket && !currentSocket.destroyed) currentSocket.destroy()
+        currentSocket = null
+      })
+      return
+    }
   }
+
+  // Fallback: spawn with pipe stdio (no real PTY, limited TUI)
+  console.log(`🚀 Spawning (no PTY): ${cmd} ${args.join(' ')}`)
+  copilotProc = spawn(cmd, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    shell: isWindows,
+    cwd: os.homedir(),
+    env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1', COLUMNS: String(cols), LINES: String(rows) }
+  })
+  console.log(`🚀 Copilot CLI spawned (PID ${copilotProc.pid}) — no PTY, limited TUI`)
+
+  copilotProc.stdout.on('data', (data) => {
+    if (currentSocket && !currentSocket.destroyed) {
+      currentSocket.write(data)
+    }
+  })
+
+  copilotProc.stderr.on('data', (data) => {
+    if (currentSocket && !currentSocket.destroyed) {
+      currentSocket.write(data)
+    }
+  })
+
+  copilotProc.on('close', (code) => {
+    console.log(`🔌 Copilot process exited (code ${code})`)
+    copilotProc = null
+    if (currentSocket && !currentSocket.destroyed) currentSocket.destroy()
+    currentSocket = null
+  })
+
+  copilotProc.on('error', (err) => {
+    console.error(`❌ Failed to spawn copilot: ${err.message}`)
+    copilotProc = null
+  })
 }
 
 function resizePty(cols, rows) {
