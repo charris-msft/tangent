@@ -337,12 +337,7 @@ export class AcpClient extends EventEmitter {
 
       await this.connection.prompt({
         sessionId: acpSessionId,
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text }]
-          }
-        ]
+        prompt: [{ type: 'text', text }]
       })
 
       // Update last active time
