@@ -369,6 +369,25 @@ export class DevBoxManager extends EventEmitter {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`[Tangent] Failed to get connection info for ${devBoxName}:`, message)
+      // Fall back to local tunnel config when API is unreachable
+      const tunnelCfg = this.getTunnelConfig(devBoxName)
+      if (tunnelCfg?.tunnelHost) {
+        console.log(`[Tangent] Using local tunnel config for ${devBoxName} (API fallback)`)
+        let tunnelId = tunnelCfg.tunnelName ?? tunnelCfg.tunnelId
+        if (!tunnelId && tunnelCfg.tunnelHost) {
+          const match = tunnelCfg.tunnelHost.match(/^([a-z0-9-]+?)(?:-\d+)?\./)
+          if (match) tunnelId = match[1]
+        }
+        return {
+          sshHost: tunnelCfg.tunnelHost,
+          sshPort: tunnelCfg.sshPort ?? 22,
+          sshUser: tunnelCfg.sshUser ?? 'azureuser',
+          sshKeyPath: tunnelCfg.sshKeyPath,
+          sshConfigured: true,
+          tunnelId,
+          acpPort: REMOTE_PORTS.ACP_REMOTE
+        }
+      }
       return null
     }
   }

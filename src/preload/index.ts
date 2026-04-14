@@ -47,12 +47,18 @@ const tangentAPI = {
     saveGroups: (groups: any) => ipcRenderer.invoke('agents:saveGroups', groups),
     launch: (agentId: string, sessionId: string) =>
       ipcRenderer.invoke('agents:launch', agentId, sessionId),
+    launchByName: (agentName: string, sessionId?: string) =>
+      ipcRenderer.invoke('agents:launchByName', agentName, sessionId),
 
     onUpdated: (cb: (groups: any) => void) => {
       const handler = (_: any, groups: any) => cb(groups)
       ipcRenderer.on('agents:updated', handler)
       return () => { ipcRenderer.removeListener('agents:updated', handler) }
     }
+  },
+
+  test: {
+    getSessionStates: () => ipcRenderer.invoke('test:getSessionStates')
   },
 
   sdk: {

@@ -88,6 +88,36 @@ export function registerIpcHandlers(deps: {
     if (agent) agentLauncher.launch(agent, sessionId)
   })
 
+  // Test helper: launch agent by name (for e2e tests that don't know IDs)
+  ipcMain.handle('agents:launchByName', (_, agentName: string, sessionId?: string) => {
+    const groups = agentStore.getGroups()
+    for (const group of groups) {
+      for (const agent of group.agents) {
+        if (agent.name.toLowerCase().includes(agentName.toLowerCase())) {
+          console.log(`[Tangent] Test helper: launching agent "${agent.name}" (${agent.id})`)
+          agentLauncher.launch(agent, sessionId ?? '')
+          return { launched: true, agentId: agent.id, agentName: agent.name }
+        }
+      }
+    }
+    return { launched: false, error: `Agent "${agentName}" not found` }
+  })
+
+  // Test helper: get all session states (for e2e assertions)
+  ipcMain.handle('test:getSessionStates', () => {
+    const sessions = sessionStore.getAll()
+    return sessions.map(s => ({
+      id: s.id,
+      name: s.name,
+      status: s.status,
+      kind: s.kind,
+      agentType: s.agentType,
+      remoteState: s.remoteState,
+      devBoxName: s.devBoxName,
+      devBoxProject: s.devBoxProject
+    }))
+  })
+
   // --- Session Metrics ---
   ipcMain.handle('session:getMetrics', (_, sessionId: string) => {
     const session = sessionStore.get(sessionId)
