@@ -318,6 +318,10 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
             window.tangentAPI.terminal.resize(session.id, cols, rows)
           })
           cleanupFns.push(() => onResizeDisposable.dispose())
+
+          // Send initial terminal size immediately so remote PTY bridge
+          // can spawn Copilot at the correct dimensions
+          window.tangentAPI.terminal.resize(session.id, terminal.cols, terminal.rows)
         }
 
         instances.set(session.id, {
