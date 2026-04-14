@@ -28,6 +28,8 @@ export class AcpClient extends EventEmitter {
   private tangentToAcpSessionMap = new Map<string, string>()
   private acpToTangentSessionMap = new Map<string, string>()
   private pendingPermissionRequests = new Map<string, (response: AcpPermissionResponse) => void>()
+  private lastConnectOptions: AcpConnectionOptions | null = null
+  private lastSessionConfigs = new Map<string, AcpSessionConfig>()
 
   /**
    * Connect to an ACP agent via TCP (through the SSH-tunneled local port).
@@ -38,6 +40,8 @@ export class AcpClient extends EventEmitter {
       console.warn('[Tangent 2] AcpClient: Already connected')
       return
     }
+
+    this.lastConnectOptions = options
 
     try {
       this.state = 'connecting'
@@ -186,6 +190,7 @@ export class AcpClient extends EventEmitter {
       this.sessions.set(acpSessionId, session)
       this.tangentToAcpSessionMap.set(tangentSessionId, acpSessionId)
       this.acpToTangentSessionMap.set(acpSessionId, tangentSessionId)
+      this.lastSessionConfigs.set(tangentSessionId, config)
 
       this.emit('acp:session-created', session)
 
@@ -268,19 +273,60 @@ export class AcpClient extends EventEmitter {
   }
 
   /**
+   * Reconnect to ACP agent and re-create sessions.
+   * Used when tunnel drops and reconnects.
+   */
+  async reconnect(): Promise<void> {
+    if (!this.lastConnectOptions) {
+      throw new Error('No previous connection options — cannot reconnect')
+    }
+
+    console.log('[Tangent 2] AcpClient: Reconnecting...')
+
+    // Tear down old connection
+    await this.disconnect()
+
+    // Clear old session mappings (will be re-created)
+    const oldMappings = new Map(this.tangentToAcpSessionMap)
+    this.sessions.clear()
+    this.tangentToAcpSessionMap.clear()
+    this.acpToTangentSessionMap.clear()
+
+    // Reconnect
+    await this.connect(this.lastConnectOptions)
+
+    // Re-create sessions using saved configs
+    for (const [tangentSessionId] of oldMappings) {
+      const config = this.lastSessionConfigs.get(tangentSessionId)
+      if (config) {
+        try {
+          console.log(`[Tangent 2] AcpClient: Re-creating session for ${tangentSessionId}`)
+          await this.newSession(config)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.warn(`[Tangent 2] AcpClient: Failed to re-create session ${tangentSessionId}:`, msg)
+        }
+      }
+    }
+
+    console.log('[Tangent 2] AcpClient: Reconnection complete')
+  }
+
+  /**
    * Send a prompt to an ACP session.
+   * Auto-reconnects and retries once if the prompt fails with an internal error.
    */
   async sendPrompt(tangentSessionId: string, text: string): Promise<void> {
-    if (!this.connection) {
-      throw new Error('Not connected to ACP agent')
-    }
+    const doSend = async (): Promise<void> => {
+      if (!this.connection) {
+        throw new Error('Not connected to ACP agent')
+      }
 
-    const acpSessionId = this.tangentToAcpSessionMap.get(tangentSessionId)
-    if (!acpSessionId) {
-      throw new Error(`No ACP session mapped to Tangent session ${tangentSessionId}`)
-    }
+      const acpSessionId = this.tangentToAcpSessionMap.get(tangentSessionId)
+      if (!acpSessionId) {
+        throw new Error(`No ACP session mapped to Tangent session ${tangentSessionId}`)
+      }
 
-    try {
       await this.connection.prompt({
         sessionId: acpSessionId,
         messages: [
@@ -296,11 +342,25 @@ export class AcpClient extends EventEmitter {
       if (session) {
         session.lastActiveAt = Date.now()
       }
+    }
+
+    try {
+      await doSend()
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Failed to send prompt:', error.message)
-      this.emit('acp:error', error)
-      throw error
+      console.warn('[Tangent 2] AcpClient: Prompt failed:', error.message, '— attempting reconnect')
+
+      // Try reconnecting and retrying once
+      try {
+        await this.reconnect()
+        await doSend()
+        console.log('[Tangent 2] AcpClient: Prompt succeeded after reconnect')
+      } catch (retryErr) {
+        const retryError = retryErr instanceof Error ? retryErr : new Error(String(retryErr))
+        console.warn('[Tangent 2] AcpClient: Prompt failed after reconnect:', retryError.message)
+        this.emit('acp:error', retryError)
+        throw retryError
+      }
     }
   }
 
@@ -337,8 +397,8 @@ export class AcpClient extends EventEmitter {
   }
 
   /**
-   * Disconnect from the ACP agent.
-   * Closes all sessions and the connection.
+   * Disconnect from ACP agent and clean up connection state.
+   * Session mappings are preserved for reconnection.
    */
   async disconnect(): Promise<void> {
     if (!this.connection) {
@@ -346,31 +406,19 @@ export class AcpClient extends EventEmitter {
     }
 
     try {
-      // Close all active sessions if agent supports it
-      if (this.connection.unstable_closeSession) {
-        const closePromises = Array.from(this.sessions.keys()).map(async (sessionId) => {
-          try {
-            await this.connection!.unstable_closeSession!({ sessionId })
-          } catch (err) {
-            console.warn(`[Tangent 2] AcpClient: Failed to close session ${sessionId}:`, err)
-          }
-        })
-        await Promise.all(closePromises)
-      }
-
-      // Clear session maps
+      // Clear session maps (will be re-created on reconnect if needed)
       this.sessions.clear()
       this.tangentToAcpSessionMap.clear()
       this.acpToTangentSessionMap.clear()
 
-      // The connection will be cleaned up by the closed promise handler
       this.connection = null
       this.state = 'disconnected'
       this.emit('acp:disconnected')
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
       console.warn('[Tangent 2] AcpClient: Error during disconnect:', error.message)
-      this.emit('acp:error', error)
+      this.connection = null
+      this.state = 'disconnected'
     }
   }
 

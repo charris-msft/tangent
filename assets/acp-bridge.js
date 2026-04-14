@@ -3,11 +3,9 @@
  * ACP Bridge — wraps `@github/copilot --acp` (stdio) as a TCP server.
  *
  * The Copilot CLI's --acp mode speaks ndjson over stdin/stdout.
- * This bridge listens on a TCP port and spawns a Copilot process
- * per connection, bridging TCP ↔ stdio.
- *
- * Copilot is only spawned when the client sends data (not on bare TCP connect),
- * so health-check probes don't waste resources.
+ * This bridge listens on a TCP port and maintains a SINGLE Copilot process
+ * that survives tunnel reconnections. Multiple TCP connections (from tunnel
+ * drops/reconnects) are transparently routed to the same Copilot process.
  *
  * Usage:
  *   node acp-bridge.js [port]       # default: 7333
@@ -20,113 +18,122 @@ const net = require('net')
 const { spawn } = require('child_process')
 
 const PORT = parseInt(process.argv[2] || '7333', 10)
+const GRACE_PERIOD_MS = 120_000 // 2 minutes before killing Copilot after disconnect
 
-let activeClient = null
+// Persistent state — survives socket reconnections
+let currentSocket = null
+let copilotProc = null
+let graceTimer = null
+let stdoutBuffer = ''
+
+function forwardToSocket(text) {
+  if (currentSocket && !currentSocket.destroyed) {
+    currentSocket.write(text)
+  }
+}
+
+function spawnCopilot() {
+  const isWindows = process.platform === 'win32'
+  let cmd, args
+  try {
+    const { execSync } = require('child_process')
+    execSync(isWindows ? 'where copilot' : 'which copilot', { stdio: 'ignore' })
+    cmd = 'copilot'
+    args = ['--acp']
+  } catch {
+    cmd = 'npx'
+    args = ['--yes', '@github/copilot', '--acp']
+  }
+
+  console.log(`🚀 Spawning: ${cmd} ${args.join(' ')}`)
+  copilotProc = spawn(cmd, args, {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    shell: isWindows,
+    env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
+  })
+  console.log(`🚀 Copilot CLI spawned (PID ${copilotProc.pid})`)
+
+  // Bridge: copilot stdout → current socket (only valid ndjson lines)
+  copilotProc.stdout.on('data', (data) => {
+    stdoutBuffer += data.toString()
+    const lines = stdoutBuffer.split('\n')
+    stdoutBuffer = lines.pop() // keep incomplete line in buffer
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      if (trimmed.startsWith('{')) {
+        forwardToSocket(trimmed + '\n')
+      } else {
+        console.log(`[copilot stdout filtered] ${trimmed}`)
+      }
+    }
+  })
+
+  copilotProc.stderr.on('data', (data) => {
+    const text = data.toString().trim()
+    if (text) console.log(`[copilot stderr] ${text}`)
+  })
+
+  copilotProc.on('close', (code) => {
+    console.log(`🔌 Copilot process exited (code ${code})`)
+    copilotProc = null
+    if (currentSocket && !currentSocket.destroyed) currentSocket.destroy()
+    currentSocket = null
+  })
+
+  copilotProc.on('error', (err) => {
+    console.error(`❌ Failed to spawn copilot: ${err.message}`)
+    forwardToSocket(JSON.stringify({
+      jsonrpc: '2.0', id: null,
+      error: { code: -1, message: `Failed to spawn copilot: ${err.message}` }
+    }) + '\n')
+    copilotProc = null
+  })
+}
 
 const server = net.createServer((socket) => {
-  if (activeClient) {
-    console.log('⚠ New client connected — disconnecting previous')
-    activeClient.socket.destroy()
-    if (activeClient.proc) activeClient.proc.kill()
+  // Cancel any pending grace timer — client reconnected
+  if (graceTimer) {
+    clearTimeout(graceTimer)
+    graceTimer = null
+    console.log('🔄 Client reconnected — cancelled grace timer')
   }
 
-  console.log(`✅ Client connected from ${socket.remoteAddress}:${socket.remotePort}`)
-
-  let proc = null
-  let dataBuffer = []
-
-  activeClient = { socket, proc }
-
-  function spawnCopilot() {
-    // Try global copilot first, fall back to npx
-    const isWindows = process.platform === 'win32'
-    let cmd, args
-    try {
-      // Check if copilot is available globally
-      const { execSync } = require('child_process')
-      execSync(isWindows ? 'where copilot' : 'which copilot', { stdio: 'ignore' })
-      cmd = 'copilot'
-      args = ['--acp']
-    } catch {
-      cmd = 'npx'
-      args = ['--yes', '@github/copilot', '--acp']
-    }
-
-    console.log(`🚀 Spawning: ${cmd} ${args.join(' ')}`)
-    proc = spawn(cmd, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: isWindows,
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }
-    })
-    activeClient.proc = proc
-    console.log(`🚀 Copilot CLI spawned (PID ${proc.pid})`)
-
-    // Flush buffered data
-    for (const chunk of dataBuffer) {
-      if (proc.stdin.writable) proc.stdin.write(chunk)
-    }
-    dataBuffer = []
-
-    // Bridge: copilot stdout → socket (only forward valid ndjson lines)
-    let stdoutBuffer = ''
-    proc.stdout.on('data', (data) => {
-      if (socket.destroyed) return
-      stdoutBuffer += data.toString()
-      const lines = stdoutBuffer.split('\n')
-      stdoutBuffer = lines.pop() // keep incomplete line in buffer
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        // Only forward lines that look like JSON (start with {)
-        // This filters out npm/npx progress output and other noise
-        if (trimmed.startsWith('{')) {
-          socket.write(trimmed + '\n')
-        } else {
-          console.log(`[copilot stdout filtered] ${trimmed}`)
-        }
-      }
-    })
-
-    proc.stderr.on('data', (data) => {
-      const text = data.toString().trim()
-      if (text) console.log(`[copilot stderr] ${text}`)
-    })
-
-    proc.on('close', (code) => {
-      console.log(`🔌 Copilot process exited (code ${code})`)
-      if (!socket.destroyed) socket.destroy()
-      if (activeClient?.proc === proc) activeClient = null
-    })
-
-    proc.on('error', (err) => {
-      console.error(`❌ Failed to spawn copilot: ${err.message}`)
-      if (!socket.destroyed) {
-        socket.write(JSON.stringify({
-          jsonrpc: '2.0', id: null,
-          error: { code: -1, message: `Failed to spawn copilot: ${err.message}` }
-        }) + '\n')
-        socket.destroy()
-      }
-    })
+  // Replace current socket (tunnel reconnect creates new TCP connection)
+  if (currentSocket && !currentSocket.destroyed) {
+    console.log('⚠ New client connected — replacing previous socket (keeping Copilot alive)')
+    currentSocket.destroy()
   }
+  currentSocket = socket
 
-  // Bridge: socket → copilot stdin (lazy spawn on first data)
+  const reconnecting = !!copilotProc
+  console.log(`✅ Client connected from ${socket.remoteAddress}:${socket.remotePort}` +
+    (reconnecting ? ' (reconnected to existing Copilot)' : ' (fresh)'))
+
+  // Bridge: socket → copilot stdin
   socket.on('data', (data) => {
-    if (!proc) {
-      dataBuffer.push(data)
+    if (!copilotProc) {
+      // Lazy spawn on first data
       spawnCopilot()
-    } else if (proc.stdin.writable) {
-      proc.stdin.write(data)
+    }
+    if (copilotProc && copilotProc.stdin.writable) {
+      copilotProc.stdin.write(data)
     }
   })
 
   socket.on('close', () => {
-    console.log('🔌 Client disconnected')
-    if (proc) {
-      if (proc.stdin.writable) proc.stdin.end()
-      proc.kill()
-    }
-    if (activeClient?.socket === socket) activeClient = null
+    console.log('🔌 Client disconnected — starting grace period')
+    if (currentSocket === socket) currentSocket = null
+
+    // Don't kill Copilot immediately — tunnel might reconnect
+    graceTimer = setTimeout(() => {
+      if (copilotProc) {
+        console.log(`⏰ Grace period expired (${GRACE_PERIOD_MS / 1000}s) — killing Copilot`)
+        copilotProc.kill()
+        copilotProc = null
+      }
+      graceTimer = null
+    }, GRACE_PERIOD_MS)
   })
 
   socket.on('error', (err) => {
@@ -136,9 +143,8 @@ const server = net.createServer((socket) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🌉 ACP Bridge listening on port ${PORT}`)
-  console.log(`   Each client connection spawns: npx @github/copilot --acp`)
-  console.log(`   Bridging TCP ↔ stdio (ndjson)`)
-  console.log(`   Copilot only spawned when client sends data (probes ignored)\n`)
+  console.log(`   Copilot spawned on first client data, survives reconnections`)
+  console.log(`   Grace period: ${GRACE_PERIOD_MS / 1000}s before killing Copilot on disconnect`)
   console.log(`   Waiting for Tangent to connect via dev tunnel...\n`)
 })
 
@@ -153,7 +159,7 @@ server.on('error', (err) => {
 
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down...')
-  if (activeClient?.proc) activeClient.proc.kill()
+  if (copilotProc) copilotProc.kill()
   server.close()
   process.exit(0)
 })
