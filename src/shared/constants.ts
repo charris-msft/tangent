@@ -36,6 +36,18 @@ export const ZOOM = {
   MAX: 32,
 } as const
 
+// Dev Center API resilience settings
+export const DEVBOX_API = {
+  /** Abort a single request after 30 seconds (fail fast, don't wait for 60s gateway timeout). */
+  TIMEOUT_MS: 30_000,
+  /** Number of retry attempts after the initial request fails. */
+  MAX_RETRIES: 3,
+  /** Fixed delay between retry attempts. */
+  RETRY_DELAY_MS: 2_000,
+  /** HTTP status codes that are safe to retry. */
+  RETRYABLE_STATUS_CODES: [502, 503, 504] as readonly number[],
+} as const
+
 // Remote Dev Box / ACP port configuration
 export const REMOTE_PORTS = {
   /** Port ACP server listens on inside the Dev Box. */

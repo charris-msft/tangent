@@ -1,5 +1,16 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import type { DevBoxResource } from '@shared/devbox-types'
+import { DEVBOX_API } from '@shared/constants'
+
+/** Check whether an error message indicates a retryable failure (timeout or server error). */
+function isRetryableError(message: string): boolean {
+  return /timed out|timeout|502|503|504|gateway/i.test(message)
+}
+
+interface RetryStatus {
+  attempt: number
+  maxAttempts: number
+}
 
 interface DevBoxPickerProps {
   open: boolean
@@ -24,23 +35,33 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null)
+  const cancelledRef = useRef(false)
 
-  useEffect(() => {
-    if (!open) {
-      setSelectedId(null)
-      return
-    }
-
+  /** Fetch Dev Boxes with auto-retry on transient errors. */
+  const loadDevBoxes = useCallback(async () => {
     setLoading(true)
     setError(null)
     setDevBoxes([])
     setSshStatus({})
+    setRetryStatus(null)
+    cancelledRef.current = false
 
-    window.tangentAPI.devbox
-      .list()
-      .then(async (boxes: DevBoxResource[]) => {
+    const maxAttempts = DEVBOX_API.MAX_RETRIES
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (cancelledRef.current) return
+      try {
+        if (attempt > 1) {
+          setRetryStatus({ attempt, maxAttempts })
+        }
+
+        const boxes: DevBoxResource[] = await window.tangentAPI.devbox.list()
+        if (cancelledRef.current) return
+
         setDevBoxes(boxes)
         setLoading(false)
+        setRetryStatus(null)
 
         // Check SSH config for each Dev Box in parallel
         const statuses: Record<string, boolean> = {}
@@ -53,13 +74,37 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
             }
           })
         )
-        setSshStatus(statuses)
-      })
-      .catch((err: Error) => {
-        setError(err.message || 'Failed to fetch Dev Boxes')
-        setLoading(false)
-      })
-  }, [open])
+        if (!cancelledRef.current) setSshStatus(statuses)
+        return
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err)
+
+        if (attempt < maxAttempts && isRetryableError(message)) {
+          // Wait before next attempt
+          await new Promise(r => setTimeout(r, DEVBOX_API.RETRY_DELAY_MS))
+          continue
+        }
+
+        // Final failure — show error
+        if (!cancelledRef.current) {
+          setError(message || 'Failed to fetch Dev Boxes')
+          setLoading(false)
+          setRetryStatus(null)
+        }
+        return
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedId(null)
+      cancelledRef.current = true
+      return
+    }
+    loadDevBoxes()
+    return () => { cancelledRef.current = true }
+  }, [open, loadDevBoxes])
 
   const handleSelect = useCallback(() => {
     if (!selectedId) return
@@ -70,19 +115,8 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
   }, [selectedId, devBoxes, onSelect])
 
   const handleRetry = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    window.tangentAPI.devbox
-      .list()
-      .then((boxes: DevBoxResource[]) => {
-        setDevBoxes(boxes)
-        setLoading(false)
-      })
-      .catch((err: Error) => {
-        setError(err.message || 'Failed to fetch Dev Boxes')
-        setLoading(false)
-      })
-  }, [])
+    loadDevBoxes()
+  }, [loadDevBoxes])
 
   if (!open) return null
 
@@ -102,7 +136,9 @@ export function DevBoxPicker({ open, onSelect, onCancel }: DevBoxPickerProps) {
         {loading && (
           <div className="py-8 text-center">
             <div className="animate-pulse-slow" style={{ color: 'var(--text-secondary)' }}>
-              Loading Dev Boxes...
+              {retryStatus
+                ? `Dev Center API timed out. Retrying\u2026 (attempt ${retryStatus.attempt} of ${retryStatus.maxAttempts})`
+                : 'Loading Dev Boxes\u2026'}
             </div>
           </div>
         )}

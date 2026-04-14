@@ -9,7 +9,7 @@ import type {
   DevBoxConnectionInfo,
   DevBoxHealthStatus
 } from '../../shared/devbox-types'
-import { REMOTE_PORTS } from '@shared/constants'
+import { REMOTE_PORTS, DEVBOX_API } from '@shared/constants'
 
 const API_VERSION = '2024-02-01'
 const TOKEN_SCOPE = 'https://devcenter.azure.com/.default'
@@ -125,25 +125,29 @@ export class DevBoxManager extends EventEmitter {
   // REST helper
   // ---------------------------------------------------------------------------
 
-  private async request<T>(method: string, path: string, retries = 2): Promise<T> {
+  private async request<T>(method: string, path: string, retries = DEVBOX_API.MAX_RETRIES): Promise<T> {
     if (!this.config) throw new Error('DevBox not configured')
     const token = await this.getToken()
     const separator = path.includes('?') ? '&' : '?'
     const url = `${this.config.devCenterEndpoint}${path}${separator}api-version=${API_VERSION}`
 
     for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), DEVBOX_API.TIMEOUT_MS)
       try {
         const response = await fetch(url, {
           method,
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json'
-          }
+          },
+          signal: controller.signal
         })
-        if (response.status === 504 || response.status === 503 || response.status === 429) {
+
+        if (DEVBOX_API.RETRYABLE_STATUS_CODES.includes(response.status) || response.status === 429) {
           if (attempt < retries) {
             console.warn(`[Tangent] DevBox REST ${response.status}, retrying (${attempt + 1}/${retries})...`)
-            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+            await new Promise(r => setTimeout(r, DEVBOX_API.RETRY_DELAY_MS))
             continue
           }
         }
@@ -157,13 +161,21 @@ export class DevBoxManager extends EventEmitter {
         }
         return response.json() as Promise<T>
       } catch (error) {
-        if (attempt < retries && error instanceof TypeError) {
-          // Network error — retry
-          console.warn(`[Tangent] DevBox REST network error, retrying (${attempt + 1}/${retries})...`)
-          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+        const isTimeout = error instanceof DOMException && error.name === 'AbortError'
+        const isNetwork = error instanceof TypeError
+
+        if (attempt < retries && (isTimeout || isNetwork)) {
+          const reason = isTimeout ? 'request timed out' : 'network error'
+          console.warn(`[Tangent] DevBox REST ${reason}, retrying (${attempt + 1}/${retries})...`)
+          await new Promise(r => setTimeout(r, DEVBOX_API.RETRY_DELAY_MS))
           continue
         }
+        if (isTimeout) {
+          throw new Error(`Dev Center API timed out after ${DEVBOX_API.TIMEOUT_MS / 1000}s (${method} ${path})`)
+        }
         throw error
+      } finally {
+        clearTimeout(timer)
       }
     }
     throw new Error(`REST ${method} ${path} failed after ${retries} retries`)

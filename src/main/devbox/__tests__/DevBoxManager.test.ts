@@ -113,6 +113,63 @@ describe('DevBoxManager', () => {
 
       await expect(manager.listDevBoxes()).rejects.toThrow('Failed to list Dev Boxes')
     })
+
+    it('passes AbortController signal to fetch', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ value: [] })
+      }
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockResponse as any)
+
+      await manager.listDevBoxes()
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal)
+        })
+      )
+    })
+
+    it('retries on 502 status', async () => {
+      vi.useFakeTimers()
+      const failResponse = { ok: false, status: 502, statusText: 'Bad Gateway', text: vi.fn().mockResolvedValue('') }
+      const okResponse = {
+        ok: true, status: 200,
+        json: vi.fn().mockResolvedValue({ value: [{ name: 'db1', poolName: 'p', powerState: 'Running', provisioningState: 'Succeeded', osType: 'Windows', location: 'eastus' }] })
+      }
+      vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(failResponse as any)
+        .mockResolvedValueOnce(okResponse as any)
+
+      const promise = manager.listDevBoxes()
+      await vi.advanceTimersByTimeAsync(2500)
+      const result = await promise
+
+      expect(result).toHaveLength(1)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+      vi.useRealTimers()
+    })
+
+    it('throws timeout error when request is aborted', async () => {
+      vi.useFakeTimers()
+      const abortError = new DOMException('The operation was aborted', 'AbortError')
+      vi.spyOn(globalThis, 'fetch').mockRejectedValue(abortError)
+
+      const promise = manager.listDevBoxes()
+      // Prevent unhandled rejection warning while timers advance
+      const caught = promise.catch(() => {})
+
+      // Advance past each retry delay (3 retries × 2s each)
+      for (let i = 0; i < 4; i++) {
+        await vi.advanceTimersByTimeAsync(2500)
+      }
+
+      await expect(promise).rejects.toThrow(/timed out/)
+      await caught
+      vi.useRealTimers()
+    })
   })
 
   // ============================================================================
