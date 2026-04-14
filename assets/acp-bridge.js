@@ -28,7 +28,12 @@ let stdoutBuffer = ''
 
 function forwardToSocket(text) {
   if (currentSocket && !currentSocket.destroyed) {
+    const preview = text.substring(0, 200).replace(/\n/g, '\\n')
+    console.log(`[← copilot stdout → socket] ${preview}`)
     currentSocket.write(text)
+  } else {
+    const preview = text.substring(0, 200).replace(/\n/g, '\\n')
+    console.log(`[← copilot stdout → DROPPED (no socket)] ${preview}`)
   }
 }
 
@@ -117,6 +122,8 @@ const server = net.createServer((socket) => {
       spawnCopilot()
     }
     if (copilotProc && copilotProc.stdin.writable) {
+      const preview = data.toString().substring(0, 200).replace(/\n/g, '\\n')
+      console.log(`[→ copilot stdin] ${preview}`)
       copilotProc.stdin.write(data)
     }
   })
