@@ -502,17 +502,37 @@ export class AcpClient extends EventEmitter {
       return
     }
 
+    const updateType = (notification.update as any)?.sessionUpdate || 'unknown'
+    console.log(`[Tangent 2] AcpClient: Session update type="${updateType}" for ${tangentSessionId}`)
+
     // Convert ACP notification to Tangent response format
     const response: AcpAgentResponse = {
       sessionId: tangentSessionId,
       timestamp: Date.now()
     }
 
-    // Extract message chunks
-    if (notification.update?.messages) {
-      const textChunks = notification.update.messages
+    const update = notification.update as any
+
+    // Extract text from various update types
+    // ACP sends: sessionUpdate type + content blocks
+    if (update?.content) {
+      // Single content block (agent_thought_chunk, text_delta, etc.)
+      const content = update.content
+      if (content.type === 'text' && content.text) {
+        response.text = content.text
+      }
+    }
+
+    // Also check for messages array (some ACP implementations use this)
+    if (!response.text && update?.messages) {
+      const textChunks = update.messages
         .filter((msg: any) => msg.role === 'assistant')
-        .flatMap((msg: any) => msg.content.filter((c: any) => c.type === 'text'))
+        .flatMap((msg: any) => {
+          if (Array.isArray(msg.content)) {
+            return msg.content.filter((c: any) => c.type === 'text')
+          }
+          return []
+        })
         .map((c: any) => c.text)
 
       if (textChunks.length > 0) {
@@ -521,8 +541,8 @@ export class AcpClient extends EventEmitter {
     }
 
     // Extract tool executions
-    if (notification.update?.toolCalls) {
-      response.toolExecutions = notification.update.toolCalls.map((toolCall: any) => ({
+    if (update?.toolCalls) {
+      response.toolExecutions = update.toolCalls.map((toolCall: any) => ({
         id: toolCall.id || `tool-${Date.now()}`,
         name: toolCall.name || 'unknown',
         source: 'built-in' as const,
@@ -533,8 +553,8 @@ export class AcpClient extends EventEmitter {
     }
 
     // Map stop reason to status
-    if (notification.update?.stopReason) {
-      switch (notification.update.stopReason) {
+    if (update?.stopReason) {
+      switch (update.stopReason) {
         case 'end_turn':
         case 'max_tokens':
           response.status = 'completed'
@@ -554,13 +574,13 @@ export class AcpClient extends EventEmitter {
       session.lastActiveAt = Date.now()
 
       // Update metrics if available
-      if (notification.update?.usage) {
+      if (update?.usage) {
         session.metrics = {
-          inputTokens: notification.update.usage.inputTokens || 0,
-          outputTokens: notification.update.usage.outputTokens || 0,
-          cacheReadTokens: notification.update.usage.cacheReadTokens || 0,
-          cacheWriteTokens: notification.update.usage.cacheWriteTokens || 0,
-          cost: 0, // ACP doesn't provide cost directly
+          inputTokens: update.usage.inputTokens || 0,
+          outputTokens: update.usage.outputTokens || 0,
+          cacheReadTokens: update.usage.cacheReadTokens || 0,
+          cacheWriteTokens: update.usage.cacheWriteTokens || 0,
+          cost: 0,
           totalPremiumRequests: 0
         }
       }
