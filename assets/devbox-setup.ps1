@@ -350,12 +350,17 @@ if ($LASTEXITCODE -eq 0 -and $existing -notmatch 'not found') {
     $existing | ForEach-Object { Write-Detail "  $_" }
 } else {
     Write-Detail "Creating new tunnel '$TunnelName'..."
-    & devtunnel create $TunnelName
+    $createOutput = & devtunnel create $TunnelName 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Failed to create tunnel '$TunnelName'"
-        throw "Failed to create tunnel '$TunnelName'"
+        if ($createOutput -match 'Conflict') {
+            Write-Success "Tunnel '$TunnelName' already exists (owned by current identity)"
+        } else {
+            Write-Fail "Failed to create tunnel '$TunnelName': $createOutput"
+            throw "Failed to create tunnel '$TunnelName'"
+        }
+    } else {
+        Write-Success "Tunnel '$TunnelName' created"
     }
-    Write-Success "Tunnel '$TunnelName' created"
 }
 
 Write-Detail "Configuring SSH port (22) on tunnel..."
