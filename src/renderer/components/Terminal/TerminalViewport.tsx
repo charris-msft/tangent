@@ -319,9 +319,13 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
           })
           cleanupFns.push(() => onResizeDisposable.dispose())
 
-          // Send initial terminal size immediately so remote PTY bridge
-          // can spawn Copilot at the correct dimensions
-          window.tangentAPI.terminal.resize(session.id, terminal.cols, terminal.rows)
+          // Send initial terminal size after fitAddon has a chance to calculate
+          // the real dimensions from the DOM container. We use a short delay
+          // because fit() runs in requestAnimationFrame when the terminal becomes visible.
+          const initialResizeTimer = setTimeout(() => {
+            window.tangentAPI.terminal.resize(session.id, terminal.cols, terminal.rows)
+          }, 200)
+          cleanupFns.push(() => clearTimeout(initialResizeTimer))
         }
 
         instances.set(session.id, {
