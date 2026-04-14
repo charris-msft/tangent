@@ -182,7 +182,15 @@ export class RemoteSessionManager extends EventEmitter {
 
       console.log(`[Tangent 2] RemoteSessionManager: Syncing workspace outbound...`)
 
-      const remoteWorkspacePath = agentProfile.remote.repoPath || '/home/workspace'
+      // Remote workspace path: use explicit repoPath from config, or fall back
+      // to user's home directory (safe default on Windows Dev Boxes)
+      const connInfo = connectionStatus.connectionInfo
+      const sshUser = connInfo?.sshUser || agentProfile.remote.sshUser || 'azureuser'
+      const defaultRemotePath = process.platform === 'win32'
+        ? `C:\\Users\\${sshUser}`
+        : `/home/${sshUser}`
+      const remoteWorkspacePath = agentProfile.remote.repoPath || defaultRemotePath
+      console.log(`[Tangent 2] RemoteSessionManager: Remote cwd = ${remoteWorkspacePath}`)
       try {
         const syncResult = await this.devBoxConnector.syncWorkspaceOut(
           connectionId,
@@ -207,7 +215,6 @@ export class RemoteSessionManager extends EventEmitter {
 
       console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
 
-      const connInfo = connectionStatus.connectionInfo
       // Use the actual tunneled local port from the connector, not the static constant
       const acpLocalPort = connectionStatus.acpLocalPort ?? REMOTE_PORTS.ACP_LOCAL
       console.log(`[Tangent 2] RemoteSessionManager: ACP local port = ${acpLocalPort}`)

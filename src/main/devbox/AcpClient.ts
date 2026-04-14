@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { Readable } from 'stream'
-import { ClientSideConnection, type Client, type Stream, ndJsonStream } from '@agentclientprotocol/sdk'
+import { ClientSideConnection, type Client, type Stream, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 import type * as schema from '@agentclientprotocol/sdk'
 import type {
   AcpConnectionOptions,
@@ -115,13 +115,12 @@ export class AcpClient extends EventEmitter {
 
       // Initialize the connection
       const initResponse = await this.connection.initialize({
-        protocolVersion: '1.0',
+        protocolVersion: PROTOCOL_VERSION,
         clientInfo: {
           name: 'Tangent',
           version: '2.0.0'
         },
         capabilities: {
-          // Advertise capabilities Tangent supports
           experimental: {}
         }
       })
@@ -166,10 +165,11 @@ export class AcpClient extends EventEmitter {
     }
 
     try {
+      console.log('[Tangent 2] AcpClient: Sending session/new with cwd:', config.cwd)
       const response = await this.connection.newSession({
         cwd: config.cwd,
-        mcpServers: config.mcpServers,
-        env: config.env
+        mcpServers: config.mcpServers ?? [],
+        env: config.env ?? {}
       })
 
       const acpSessionId = response.sessionId
@@ -193,6 +193,9 @@ export class AcpClient extends EventEmitter {
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
       console.warn('[Tangent 2] AcpClient: Failed to create session:', error.message)
+      if (err && typeof err === 'object' && 'code' in err) {
+        console.warn('[Tangent 2] AcpClient: Session error code:', (err as any).code, 'data:', JSON.stringify((err as any).data))
+      }
       this.emit('acp:error', error)
       throw error
     }
