@@ -88,7 +88,11 @@ export class DevBoxManager extends EventEmitter {
       }
       this.config = {
         devCenterEndpoint: parsed.devCenterEndpoint.replace(/\/+$/, ''),
-        projectName: parsed.projectName
+        projectName: parsed.projectName,
+        devBoxes: parsed.devBoxes,
+        tunnelHost: parsed.tunnelHost,
+        sshUser: parsed.sshUser,
+        sshKeyPath: parsed.sshKeyPath
       }
       this.credential = new AzureCliCredential()
       console.log(`[Tangent] DevBox configured: ${this.config.devCenterEndpoint} / ${this.config.projectName} (using AzureCliCredential)`)
@@ -186,16 +190,24 @@ export class DevBoxManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private mapDevBox(raw: any): DevBoxResource {
+    const name = raw.name ?? ''
+    const tunnelCfg = this.getTunnelConfig(name)
     return {
-      id: raw.uniqueId ?? raw.name ?? '',
-      name: raw.name ?? '',
+      id: raw.uniqueId ?? name,
+      name,
       projectName: this.config?.projectName ?? '',
       poolName: raw.poolName ?? '',
       state: this.mapPowerState(raw.powerState, raw.provisioningState),
       osType: raw.osType === 'Linux' ? 'Linux' : 'Windows',
       location: raw.location ?? '',
       createdAt: raw.createdTime ? new Date(raw.createdTime).getTime() : undefined,
-      connectionInfo: undefined
+      connectionInfo: tunnelCfg ? {
+        sshHost: tunnelCfg.tunnelHost,
+        sshPort: tunnelCfg.sshPort ?? 22,
+        sshUser: tunnelCfg.sshUser ?? 'azureuser',
+        sshConfigured: true,
+        tunnelId: tunnelCfg.tunnelId
+      } : undefined
     }
   }
 
@@ -343,9 +355,15 @@ export class DevBoxManager extends EventEmitter {
   private getTunnelConfig(devBoxName: string): DevBoxTunnelConfig | null {
     if (!this.config) return null
 
-    // Per-devbox config takes priority
-    if (this.config.devBoxes?.[devBoxName]) {
-      return this.config.devBoxes[devBoxName]
+    // Per-devbox config takes priority (case-insensitive lookup)
+    if (this.config.devBoxes) {
+      const keys = Object.keys(this.config.devBoxes)
+      const key = keys.find(
+        k => k.toLowerCase() === devBoxName.toLowerCase()
+      )
+      if (key) {
+        return this.config.devBoxes[key]
+      }
     }
 
     // Fall back to top-level fields (single Dev Box convenience)
