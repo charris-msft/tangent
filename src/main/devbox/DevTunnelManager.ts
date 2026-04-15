@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, ChildProcess, execFile } from 'child_process'
 import { REMOTE_PORTS } from '@shared/constants'
 
 interface DevTunnelConnection {
@@ -8,6 +8,16 @@ interface DevTunnelConnection {
   localPorts: Map<number, number> // remote port → local port
   status: 'connecting' | 'connected' | 'disconnected' | 'error'
   error?: string
+  /** Whether this tunnel should auto-reconnect on unexpected exit */
+  autoReconnect: boolean
+  /** Current backoff delay for reconnection attempts */
+  reconnectDelay: number
+  /** Number of consecutive reconnection attempts */
+  reconnectAttempts: number
+  /** Timer for scheduled reconnection */
+  reconnectTimer?: ReturnType<typeof setTimeout>
+  /** Last successful port mappings (used during reconnect) */
+  lastPorts?: DevTunnelPorts
 }
 
 export interface DevTunnelPorts {
@@ -15,6 +25,12 @@ export interface DevTunnelPorts {
   acpPort?: number      // local port mapped to remote:7333
   allPorts: Map<number, number>  // remote → local
 }
+
+// Reconnection constants
+const RECONNECT_BASE_DELAY = 2000     // 2s initial
+const RECONNECT_MAX_DELAY = 60000     // 60s max
+const RECONNECT_MAX_ATTEMPTS = 20     // give up after 20 tries (~10 min total)
+const TOKEN_REFRESH_TIMEOUT = 15000   // 15s to refresh token
 
 /**
  * Manages `devtunnel connect` child processes for authenticated tunnel access.
@@ -28,6 +44,13 @@ export interface DevTunnelPorts {
  * 
  * Primary connectivity is via the direct ACP port. SSH is available for
  * optional workspace sync (rsync) but not required for agent execution.
+ * 
+ * AUTO-RECONNECT: When a tunnel process exits unexpectedly, the manager
+ * automatically re-authenticates (if token expired) and reconnects with
+ * exponential backoff. This handles:
+ *   - Token expiry (silent failure after hours of idle)
+ *   - Host-side drops (Dev Box sleep/restart kills `devtunnel host`)
+ *   - Network interruptions (Wi-Fi drops, VPN reconnects)
  */
 export class DevTunnelManager extends EventEmitter {
   private connections = new Map<string, DevTunnelConnection>()
@@ -62,11 +85,16 @@ export class DevTunnelManager extends EventEmitter {
         windowsHide: true
       })
 
+      // Inherit reconnect state from previous connection (if reconnecting)
+      const prev = this.connections.get(tunnelId)
       const conn: DevTunnelConnection = {
         tunnelId,
         process: proc,
         localPorts: new Map(),
-        status: 'connecting'
+        status: 'connecting',
+        autoReconnect: prev?.autoReconnect ?? true,
+        reconnectDelay: prev?.reconnectDelay ?? RECONNECT_BASE_DELAY,
+        reconnectAttempts: prev?.reconnectAttempts ?? 0
       }
       this.connections.set(tunnelId, conn)
 
@@ -123,6 +151,9 @@ export class DevTunnelManager extends EventEmitter {
         // If we have at least the ACP port, we're good to resolve
         if (!resolved && conn.localPorts.has(REMOTE_PORTS.ACP_REMOTE)) {
           conn.status = 'connected'
+          // Reset reconnect counters on successful connection
+          conn.reconnectAttempts = 0
+          conn.reconnectDelay = RECONNECT_BASE_DELAY
           resolved = true
           clearTimeout(timeout)
           const result: DevTunnelPorts = {
@@ -130,6 +161,7 @@ export class DevTunnelManager extends EventEmitter {
             acpPort: conn.localPorts.get(REMOTE_PORTS.ACP_REMOTE),
             allPorts: new Map(conn.localPorts)
           }
+          conn.lastPorts = result
           console.log(`[Tangent 2] DevTunnel: Connected with ${conn.localPorts.size} port(s)`)
           this.emit('tunnel:connected', { tunnelId, ports: result })
           resolve(result)
@@ -140,11 +172,16 @@ export class DevTunnelManager extends EventEmitter {
         const text = data.toString()
         console.warn(`[Tangent 2] DevTunnel stderr: ${text.trim()}`)
 
+        // Detect token expiry specifically — triggers re-auth on reconnect
+        if (text.match(/login token expired|unauthorized|token.*expired/i)) {
+          conn.error = 'token_expired'
+        }
+
         if (text.match(/not found|error|failed|unauthorized/i) && !resolved) {
           resolved = true
           clearTimeout(timeout)
           conn.status = 'error'
-          conn.error = text.trim()
+          conn.error = conn.error || text.trim()
           proc.kill()
           reject(new Error(`DevTunnel error: ${text.trim()}`))
         }
@@ -152,9 +189,19 @@ export class DevTunnelManager extends EventEmitter {
 
       proc.on('close', (code) => {
         console.log(`[Tangent 2] DevTunnel process exited with code ${code}`)
+
+        // If the tunnel was connected and exited unexpectedly, try auto-reconnect
+        const wasConnected = conn.status === 'connected'
+        const shouldReconnect = wasConnected && conn.autoReconnect && !this.disposed
+        
         conn.status = 'disconnected'
-        this.connections.delete(tunnelId)
-        this.emit('tunnel:disconnected', { tunnelId })
+        this.emit('tunnel:disconnected', { tunnelId, willReconnect: shouldReconnect })
+
+        if (shouldReconnect) {
+          this._scheduleReconnect(conn)
+        } else {
+          this.connections.delete(tunnelId)
+        }
 
         if (!resolved) {
           resolved = true
@@ -178,10 +225,18 @@ export class DevTunnelManager extends EventEmitter {
 
   /**
    * Disconnect a tunnel by killing the `devtunnel connect` process.
+   * Explicit disconnect disables auto-reconnect.
    */
   disconnect(tunnelId: string): void {
     const conn = this.connections.get(tunnelId)
     if (!conn) return
+
+    // Disable auto-reconnect on explicit disconnect
+    conn.autoReconnect = false
+    if (conn.reconnectTimer) {
+      clearTimeout(conn.reconnectTimer)
+      conn.reconnectTimer = undefined
+    }
 
     try {
       conn.process.kill()
@@ -190,7 +245,7 @@ export class DevTunnelManager extends EventEmitter {
     }
     conn.status = 'disconnected'
     this.connections.delete(tunnelId)
-    this.emit('tunnel:disconnected', { tunnelId })
+    this.emit('tunnel:disconnected', { tunnelId, willReconnect: false })
     console.log(`[Tangent 2] DevTunnel: disconnected ${tunnelId}`)
   }
 
@@ -240,8 +295,108 @@ export class DevTunnelManager extends EventEmitter {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    for (const [, conn] of this.connections) {
+      conn.autoReconnect = false
+      if (conn.reconnectTimer) {
+        clearTimeout(conn.reconnectTimer)
+      }
+    }
     for (const [id] of this.connections) {
       this.disconnect(id)
     }
+  }
+
+  /**
+   * Schedule a reconnection attempt with exponential backoff.
+   */
+  private _scheduleReconnect(conn: DevTunnelConnection): void {
+    if (this.disposed || !conn.autoReconnect) return
+
+    conn.reconnectAttempts++
+    if (conn.reconnectAttempts > RECONNECT_MAX_ATTEMPTS) {
+      console.warn(
+        `[Tangent 2] DevTunnel: giving up on ${conn.tunnelId} after ${RECONNECT_MAX_ATTEMPTS} attempts`
+      )
+      conn.autoReconnect = false
+      this.connections.delete(conn.tunnelId)
+      this.emit('tunnel:reconnect-failed', {
+        tunnelId: conn.tunnelId,
+        attempts: conn.reconnectAttempts,
+        reason: 'max_attempts_exceeded'
+      })
+      return
+    }
+
+    const delay = conn.reconnectDelay
+    conn.reconnectDelay = Math.min(conn.reconnectDelay * 2, RECONNECT_MAX_DELAY)
+
+    console.log(
+      `[Tangent 2] DevTunnel: reconnecting ${conn.tunnelId} in ${delay}ms ` +
+      `(attempt ${conn.reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS})`
+    )
+
+    this.emit('tunnel:reconnecting', {
+      tunnelId: conn.tunnelId,
+      attempt: conn.reconnectAttempts,
+      delayMs: delay
+    })
+
+    conn.reconnectTimer = setTimeout(async () => {
+      conn.reconnectTimer = undefined
+      if (this.disposed || !conn.autoReconnect) return
+
+      try {
+        // If the last error was token expiry, re-authenticate first
+        if (conn.error === 'token_expired') {
+          console.log(`[Tangent 2] DevTunnel: refreshing token before reconnect...`)
+          await this._refreshToken()
+          conn.error = undefined
+        }
+
+        // Reconnect — this creates a new process and updates the connection
+        const ports = await this.connect(conn.tunnelId)
+        console.log(
+          `[Tangent 2] DevTunnel: reconnected ${conn.tunnelId} ` +
+          `(ACP→${ports.acpPort}, SSH→${ports.sshPort})`
+        )
+        this.emit('tunnel:reconnected', { tunnelId: conn.tunnelId, ports })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn(`[Tangent 2] DevTunnel: reconnect attempt ${conn.reconnectAttempts} failed: ${msg}`)
+
+        // Check if the error is token-related and mark for next attempt
+        if (msg.match(/token.*expired|login token|unauthorized/i)) {
+          conn.error = 'token_expired'
+        }
+
+        // If connection object still exists (connect() may have replaced it), schedule next attempt
+        const current = this.connections.get(conn.tunnelId)
+        if (current && current.autoReconnect) {
+          this._scheduleReconnect(current)
+        }
+      }
+    }, delay)
+  }
+
+  /**
+   * Re-authenticate with GitHub. Called when token expiry is detected.
+   */
+  private async _refreshToken(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Token refresh timeout'))
+      }, TOKEN_REFRESH_TIMEOUT)
+
+      execFile('devtunnel', ['user', 'login', '-g'], { windowsHide: true }, (err, stdout, stderr) => {
+        clearTimeout(timeout)
+        if (err) {
+          console.warn(`[Tangent 2] DevTunnel: token refresh failed: ${stderr || err.message}`)
+          reject(new Error(`Token refresh failed: ${stderr || err.message}`))
+        } else {
+          console.log(`[Tangent 2] DevTunnel: token refreshed — ${stdout.trim()}`)
+          resolve()
+        }
+      })
+    })
   }
 }
