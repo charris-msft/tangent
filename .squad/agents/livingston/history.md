@@ -226,3 +226,45 @@ This ensures windows NEVER exceed display bounds, even with floating-point round
 
 **UPDATE (2026-04-18):** This fix addressed floating-point rounding in the algorithm itself, but the real root cause of persistent user complaints was elsewhere. Danny discovered that `WindowManager.popOut()` was ignoring the bounds parameter for already-existing windows. See 2026-04-18 Explode Multi-Window Tiling entry for the complete fix. **Key insight:** The algorithm fix was correct but insufficient — we needed BOTH algorithm correctness (your fix) AND application of results to existing windows (Danny's fix).
 
+### 2026-04-18: Display Selection Persistence for Explode
+**Added:** localStorage persistence to remember user's last selected displays in DisplayPicker modal.
+
+**Implementation:**
+- **Storage key:** `tangent.explode.lastDisplaySelection` stores array of display IDs (e.g., `[1, 2, 3]`)
+- **On mount:** Reads localStorage, filters to only valid IDs (displays still connected), pre-checks those displays. Falls back to primary display if no valid IDs found.
+- **On confirm:** Writes selected IDs to localStorage before calling onConfirm callback.
+- **On cancel:** Does NOT update localStorage (preserves previous selection).
+- **Error handling:** All localStorage access wrapped in try/catch to handle quota errors, invalid JSON, or localStorage unavailable.
+
+**Files modified:**
+- `src/renderer/components/DisplayPicker.tsx` — Added STORAGE_KEY constant, restore logic in useEffect, persistence in handleConfirm
+- `vitest.config.ts` — Added `@` alias for renderer, enabled `jsdom` environment for localStorage tests
+- `package.json` — Added jsdom dev dependency
+
+**Testing:**
+- Created `src/renderer/components/__tests__/DisplayPicker.test.ts` with 10 unit tests covering:
+  - Save/restore selection
+  - Filter out disconnected displays
+  - Fallback to primary when no valid IDs
+  - Invalid JSON handling
+  - localStorage errors
+  - Cancel does not update storage
+  - Single and multiple display selections
+- All 10 tests pass
+- Build succeeds
+
+**Pattern reused:**
+- Followed existing localStorage pattern from `useHumanContext.ts` (simple direct localStorage with try/catch guards, no schema versioning needed for this simple preference).
+
+### 2026-04-18: Explode Overlap Resolution — Historical Note
+
+Two independent Danny runs (sonnet + opus) diagnosed the root cause of Explode overlaps that persisted after Livingston's bounds-clamping fix (commit 26c116e).
+
+**Key finding:** Livingston's fix was correct for its scope (algorithm precision), but two additional bugs existed:
+1. `useExplode.ts` filter excluded already-popped windows from tile calculation (Danny-v3)
+2. Main Tangent window was never tiled alongside popouts (Danny-opus)
+
+**Impact on Livingston's work:** Bounds-clamping fix (26c116e) remains valid and ships as part of the solution. It addressed real floating-point rounding edge cases. The bounds path (`WindowManager.popOut()` + new `setMainBounds()` from Danny-opus) is unchanged — existing code path intact.
+
+**Lesson:** When multiple async agents diagnose a persistent bug, each may find a correct but incomplete root cause at their level of investigation. Shipping partial fixes based on incomplete test coverage can hide deeper bugs in higher-level logic or excluded components.
+

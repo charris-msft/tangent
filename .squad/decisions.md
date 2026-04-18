@@ -89,6 +89,63 @@
 - Always use `display.workArea` (excludes taskbar), not `display.bounds` which includes taskbar area
 - Electron enforces `minWidth: 400, minHeight: 300` — will silently enlarge windows violating minimums, causing overlap. Known limitation with 16+ windows on smaller displays.
 
+### 2026-04-18: Explode Already-Popped Windows — Root Cause & Fix
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Fixed  
+**Tags:** #ui #windows #bugfix #explode
+
+**Problem:** Explode still caused overlapping windows even after popOut-bounds fix. With 5 already-popped sessions, windows stayed at cascaded positions.
+
+**Root Cause:** `useExplode.ts` filtered OUT already-popped windows before computing tile layout:
+```ts
+const poppedIds = await winApi.getPoppedSessionIds?.()
+const eligible = sessions.filter((s) => !poppedIds.includes(s.id) && s.status !== 'exited')
+```
+
+When all 5 were popped, filter excluded all 5 → `computeTileLayout()` returned `[]` → loop never executed → no windows repositioned.
+
+**Decision:** Remove already-popped filter. Explode tiles ALL windows (popped or not).
+
+**Why Test Missed It:** `tests/explode-bounds.spec.ts` manually called `winApi.popOut()` directly, bypassing the hook's filter. Test verified the low-level method works but didn't test the hook's filter logic.
+
+**Key Insight:** Integration tests that bypass higher-level logic (hooks) can pass while real bugs persist in that logic. Always test at the FULL user code path: button click → event handler → React hook → IPC call → main process → Electron API.
+
+**Files Changed:** `src/renderer/hooks/useExplode.ts`, `src/renderer/App.tsx`, `tests/explode-real-ui.spec.ts`
+
+### 2026-04-18: Explode — Include Main Window in Tile Grid (Final Root Cause)
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Implemented  
+**Tags:** #ui #windows #bugfix #rootcause
+
+**Problem:** After two prior fixes, users still observed overlapping windows. Both prior e2e tests passed but only asserted popout-to-popout non-overlap and ignored the main Tangent window.
+
+**Root Cause — Proven by Live Evidence:** Explode moves only popouts. Main window stays at default bounds (~1200×800, centered), visually overlapping every popout. Evidence from Brady's dual DELL U2720Q @165% DPI, primary workArea 2328×1266 with 12 popouts:
+```
+overlap pairs (total): 12
+  all 12 pairs involve id=1 (main window)
+popout-to-popout overlaps: 0
+```
+
+**Decision:** Main Tangent window participates in tile grid as ordinary cell.
+
+- **WindowManager.setMainBounds():** New method that lowers `minimumSize` (Electron silently enlarges windows violating minimums, defeating bounds), then calls `setBounds()`
+- **IPC & Preload:** New handler `window:setMainBounds`, exposed as `tangentAPI.window.setMainBounds(bounds)`
+- **useExplode:** Reserve sentinel tile slot `__tangent_main_window__` as first cell, call `setMainBounds(firstTile)` before popouts
+
+**Why Not Minimize Main:** Brady's hint explicitly stated main window "should be" in grid. Hiding it makes Explode surprising — users lose Sessions panel and controls. Tiling keeps main visible and useful as "hub" cell.
+
+**Test Coverage:** Rewrote `tests/explode-bounds.spec.ts` to:
+1. Create 5 sessions + use real IPC flow
+2. Collect bounds for EVERY BrowserWindow (main + popouts)
+3. Assert pairwise non-overlap across ALL windows
+4. Assert all windows fit in workArea
+
+Old assertion space (popouts only) is retired. This test would have caught the bug before both prior shipped fixes.
+
+**Governance Note:** Two prior fixes shipped based on tests that passed but did not reproduce actual failure mode. Lesson: when asserting "no overlap" on windowed layout, **include every visible BrowserWindow in assertion space, not filtered subset.** Filtering to subset hides bugs in excluded windows — exactly where the bug lived.
+
+**Files Changed:** `src/main/window/WindowManager.ts`, `src/main/ipc/windowHandlers.ts`, `src/preload/index.ts`, `src/renderer/hooks/useExplode.ts`, `tests/explode-bounds.spec.ts`
+
 ## Governance
 
 - All meaningful changes require team consensus
