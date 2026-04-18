@@ -36,6 +36,38 @@ export class WindowManager extends EventEmitter {
     })
   }
 
+  /**
+   * Reposition the main Tangent window to the given bounds. Used by Explode
+   * so the main window participates in the tile grid instead of sitting on
+   * top of the tiled popouts.
+   *
+   * Temporarily lowers the main window's minimum size so small tile cells
+   * don't get silently enlarged by Electron's minSize enforcement (which
+   * was the root cause of popout-vs-main overlap before this fix).
+   */
+  setMainBounds(bounds: PopoutBounds): boolean {
+    const main = this.getMainWindow()
+    if (!main || main.isDestroyed()) return false
+    try {
+      if (main.isMinimized()) main.restore()
+      if (main.isMaximized()) main.unmaximize()
+      // Floor the minSize so tiles smaller than the default (600x400) are honored.
+      const newMinW = Math.min(400, bounds.width)
+      const newMinH = Math.min(300, bounds.height)
+      main.setMinimumSize(newMinW, newMinH)
+      main.setBounds({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height
+      })
+      return true
+    } catch (err) {
+      console.error('[WindowManager] Failed to set main bounds:', err)
+      return false
+    }
+  }
+
   getMainWindow(): BrowserWindow | null {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       return this.mainWindow

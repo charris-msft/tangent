@@ -199,6 +199,34 @@ const tangentAPI = {
     }
   },
 
+  window: {
+    popOut: (sessionId: string, bounds?: { x?: number; y?: number; width: number; height: number }): Promise<boolean> =>
+      ipcRenderer.invoke('window:popOut', sessionId, bounds),
+    setMainBounds: (bounds: { x: number; y: number; width: number; height: number }): Promise<boolean> =>
+      ipcRenderer.invoke('window:setMainBounds', bounds),
+    pullBack: (sessionId: string): Promise<void> => ipcRenderer.invoke('window:pullBack', sessionId),
+    collapseAll: (): Promise<void> => ipcRenderer.invoke('window:collapseAll'),
+    isPoppedOut: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('window:isPoppedOut', sessionId),
+    getPoppedSessionIds: (): Promise<string[]> => ipcRenderer.invoke('window:getPoppedSessionIds'),
+    getDisplays: () => ipcRenderer.invoke('window:getDisplays'),
+
+    onPoppedOut: (cb: (sessionId: string) => void) => {
+      const handler = (_: any, sessionId: string) => cb(sessionId)
+      ipcRenderer.on('window:popped-out', handler)
+      return () => { ipcRenderer.removeListener('window:popped-out', handler) }
+    },
+    onPulledBack: (cb: (sessionId: string) => void) => {
+      const handler = (_: any, sessionId: string) => cb(sessionId)
+      ipcRenderer.on('window:pulled-back', handler)
+      return () => { ipcRenderer.removeListener('window:pulled-back', handler) }
+    },
+    onCollapsedAll: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('window:collapsed-all', handler)
+      return () => { ipcRenderer.removeListener('window:collapsed-all', handler) }
+    }
+  },
+
   acp: {
     respondPermission: (requestId: string, approved: boolean, rememberChoice = false) => {
       ipcRenderer.send('acp:permission-response', {

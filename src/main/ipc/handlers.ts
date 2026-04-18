@@ -13,6 +13,7 @@ import type { DevBoxManager } from '../devbox/DevBoxManager'
 import type { AcpClient } from '../devbox/AcpClient'
 import type { DevBoxProvisioningState } from '../../shared/devbox-types'
 import type { AcpPermissionResponse } from '../../shared/acp-types'
+import { windowManager } from '../window'
 
 export function registerIpcHandlers(deps: {
   sessionManager: SessionManager
@@ -37,20 +38,20 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle('session:rename', (_, id: string, name: string) => sessionStore.rename(id, name))
   ipcMain.handle('session:scanExternal', () => sessionManager.scanExternal())
 
-  // Forward store events to renderer
+  // Forward store events to renderer (and to popout windows where relevant)
   sessionStore.on('created', (session) => {
-    getWindow()?.webContents.send('session:created', session)
+    windowManager.broadcast('session:created', session)
   })
   sessionStore.on('updated', (session) => {
-    getWindow()?.webContents.send('session:updated', session)
+    windowManager.sendToSession(session.id, 'session:updated', session)
   })
   sessionStore.on('closed', (sessionId) => {
-    getWindow()?.webContents.send('session:closed', sessionId)
+    windowManager.broadcast('session:closed', sessionId)
   })
 
   // Forward tool-use events to renderer
   sessionStore.on('tool-use', (entry) => {
-    getWindow()?.webContents.send('tooluse:entry', entry)
+    windowManager.sendToSession(entry.sessionId, 'tooluse:entry', entry)
   })
 
   // Tool use query
@@ -73,8 +74,7 @@ export function registerIpcHandlers(deps: {
       }
 
       // ACP mode: accumulate input, send as prompt on Enter
-      const win = getWindow()
-      if (win) win.webContents.send(`terminal:data:${sessionId}`, data)
+      windowManager.sendToSession(sessionId, `terminal:data:${sessionId}`, data)
 
       let buffer = remoteInputBuffers.get(sessionId) || ''
       
@@ -83,10 +83,10 @@ export function registerIpcHandlers(deps: {
           const text = buffer.trim()
           if (text) {
             console.log(`[Tangent 2] Routing terminal input to ACP prompt: "${text.substring(0, 80)}"`)
-            if (win) win.webContents.send(`terminal:data:${sessionId}`, '\r\n')
+            windowManager.sendToSession(sessionId, `terminal:data:${sessionId}`, '\r\n')
             remoteSessionManager.sendPrompt(sessionId, text).catch((err: Error) => {
               console.warn('[Tangent 2] Failed to send ACP prompt:', err.message)
-              if (win) win.webContents.send(`terminal:data:${sessionId}`, `\r\n\x1b[31m❌ ${err.message}\x1b[0m\r\n`)
+              windowManager.sendToSession(sessionId, `terminal:data:${sessionId}`, `\r\n\x1b[31m❌ ${err.message}\x1b[0m\r\n`)
             })
           }
           buffer = ''
@@ -126,7 +126,7 @@ export function registerIpcHandlers(deps: {
     const proc = ptyManager.get(session.ptyId)
     if (!proc) return
     proc.onData((data) => {
-      getWindow()?.webContents.send(`terminal:data:${sessionId}`, data)
+      windowManager.sendToSession(sessionId, `terminal:data:${sessionId}`, data)
     })
   })
 
@@ -134,7 +134,7 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle('agents:getGroups', () => agentStore.getGroups())
   ipcMain.handle('agents:saveGroups', async (_, groups) => {
     await agentStore.save(groups)
-    getWindow()?.webContents.send('agents:updated', groups)
+    windowManager.broadcast('agents:updated', groups)
   })
   ipcMain.handle('agents:launch', (_, agentId: string, sessionId: string) => {
     const agent = agentStore.findAgent(agentId)
@@ -190,7 +190,7 @@ export function registerIpcHandlers(deps: {
 
   // Forward config file changes to renderer
   configStore.on('changed', (config) => {
-    getWindow()?.webContents.send('config:changed', config)
+    windowManager.broadcast('config:changed', config)
   })
 
   // --- Config Import/Export ---
@@ -206,10 +206,10 @@ export function registerIpcHandlers(deps: {
     }
     if (bundle.agents && Array.isArray(bundle.agents)) {
       await agentStore.save(bundle.agents)
-      getWindow()?.webContents.send('agents:updated', bundle.agents)
+      windowManager.broadcast('agents:updated', bundle.agents)
     }
     const config = configStore.getAll()
-    getWindow()?.webContents.send('config:changed', config)
+    windowManager.broadcast('config:changed', config)
     return { config, agents: agentStore.getGroups() }
   })
 
@@ -289,7 +289,7 @@ export function registerIpcHandlers(deps: {
   ipcMain.handle('app:getZoom', () => zoomLevel)
   ipcMain.handle('app:setZoom', (_, level: number) => {
     zoomLevel = Math.max(8, Math.min(32, level))
-    getWindow()?.webContents.send('app:zoomChanged', zoomLevel)
+    windowManager.broadcast('app:zoomChanged', zoomLevel)
     return zoomLevel
   })
 
@@ -330,14 +330,14 @@ export function registerIpcHandlers(deps: {
 
   // Forward context updates to renderer
   contextStore.on('context-updated', (ctx) => {
-    getWindow()?.webContents.send('context:updated', ctx)
+    windowManager.sendToSession(ctx.sessionId, 'context:updated', ctx)
   })
 
   // Re-emit context when session status changes (updates resume suggestion)
   sessionStore.on('updated', (session) => {
     const ctx = contextStore.getContext(session.id)
     if (ctx) {
-      getWindow()?.webContents.send('context:updated', ctx)
+      windowManager.sendToSession(session.id, 'context:updated', ctx)
     }
   })
 
@@ -391,7 +391,7 @@ export function registerIpcHandlers(deps: {
 
     const progressCallback = reportProgress
       ? (state: DevBoxProvisioningState, elapsed: number) => {
-          getWindow()?.webContents.send('devbox:autoStartProgress', {
+          windowManager.broadcast('devbox:autoStartProgress', {
             projectName,
             devBoxName,
             state,
@@ -406,15 +406,15 @@ export function registerIpcHandlers(deps: {
   // Forward DevBox events to renderer
   if (devBoxManager) {
     devBoxManager.on('devbox:state-changed', (devBoxName, state) => {
-      getWindow()?.webContents.send('devbox:stateChanged', { devBoxName, state })
+      windowManager.broadcast('devbox:stateChanged', { devBoxName, state })
     })
 
     devBoxManager.on('devbox:health-updated', (devBoxName, health) => {
-      getWindow()?.webContents.send('devbox:healthUpdated', { devBoxName, health })
+      windowManager.broadcast('devbox:healthUpdated', { devBoxName, health })
     })
 
     devBoxManager.on('devbox:error', (devBoxName, error) => {
-      getWindow()?.webContents.send('devbox:error', { devBoxName, error })
+      windowManager.broadcast('devbox:error', { devBoxName, error })
     })
   }
 
@@ -428,28 +428,28 @@ export function registerIpcHandlers(deps: {
   // Forward ACP permission requests to renderer
   if (acpClient) {
     acpClient.on('acp:permission-request', (request) => {
-      getWindow()?.webContents.send('acp:permission-request', request)
+      windowManager.broadcast('acp:permission-request', request)
     })
 
     acpClient.on('acp:connected', () => {
-      getWindow()?.webContents.send('acp:connected')
+      windowManager.broadcast('acp:connected')
     })
 
     acpClient.on('acp:disconnected', () => {
-      getWindow()?.webContents.send('acp:disconnected')
+      windowManager.broadcast('acp:disconnected')
     })
 
     acpClient.on('acp:session-created', (session) => {
-      getWindow()?.webContents.send('acp:session-created', session)
+      windowManager.broadcast('acp:session-created', session)
     })
 
     acpClient.on('acp:message', (response) => {
-      getWindow()?.webContents.send('acp:message', response)
+      windowManager.broadcast('acp:message', response)
       
       // Format and forward as terminal output
       const formattedOutput = formatAcpResponseForTerminal(response)
       if (formattedOutput) {
-        getWindow()?.webContents.send('acp:output', {
+        windowManager.broadcast('acp:output', {
           sessionId: response.sessionId,
           text: formattedOutput
         })
@@ -457,7 +457,7 @@ export function registerIpcHandlers(deps: {
     })
 
     acpClient.on('acp:error', (error) => {
-      getWindow()?.webContents.send('acp:error', {
+      windowManager.broadcast('acp:error', {
         message: error.message,
         stack: error.stack
       })
