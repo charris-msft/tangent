@@ -189,3 +189,38 @@
 
 <!-- Append learnings below -->
 
+### 2026-04-13: Explode Window Tiling - Bounds Clamping Fix
+**Fixed:** Window overlap bug in multi-window "Explode" feature caused by floating-point rounding errors.
+
+**Problem:** User reported 5 windows overlapping after explode. Investigation showed the tiling algorithm (`computeTileLayout` in `src/shared/tiling.ts`) was mathematically correct for typical cases, but had a subtle rounding edge case: when computing window positions and sizes via division with padding, floating-point arithmetic could produce windows whose right/bottom edges exceeded display bounds by 1-2 pixels due to `Math.floor()` rounding.
+
+**Root cause examples:**
+- 2560×1440 display with 5 windows: third window ended at x=2551 (display width = 2560) ✓ barely OK
+- But with certain padding/outerPadding combinations or display scaling, accumulated rounding errors could push windows slightly out of bounds
+- Electron's BrowserWindow has `minWidth: 400, minHeight: 300`, which would cause automatic enlargement if computed sizes fell below minimums, creating guaranteed overlaps
+
+**Fix:** Added explicit bounds clamping in the final step of window positioning:
+```typescript
+const clampedWidth = Math.min(floorWidth, display.x + display.width - floorX);
+const clampedHeight = Math.min(floorHeight, display.y + display.height - floorY);
+```
+This ensures windows NEVER exceed display bounds, even with floating-point rounding errors or edge cases.
+
+**Testing:**
+- Extended existing test suite with n=5, n=6, n=8 coverage (previously missing n=5)
+- Added explicit pairwise overlap detection tests for n=2..8
+- All 24 tiling tests pass
+- Build succeeds
+
+**Key learnings:**
+- **Electron display bounds vs workArea:** Always use `screen.workArea` (accounts for taskbar) not `screen.bounds` when tiling windows. Confirmed windowHandlers.ts line 34 uses `d.workArea` correctly.
+- **DPI scaling gotcha:** Electron reports workArea in logical pixels, already accounting for OS display scaling. No double-scaling issues found in our code.
+- **Minimum window size constraint:** BrowserWindow `minWidth/minHeight` will silently enlarge windows that violate minimums, causing overlaps. With 16+ windows on 1920×1080, computed sizes fall below 300px height → automatic enlargement → guaranteed overlaps. Solution: clamp to display bounds, accept that many windows = small windows.
+- **Rounding accumulation:** Even with perfect math, `Math.floor()` on fractional cellWidth/cellHeight can accumulate errors across columns/rows. Final clamp prevents windows from spilling 1-2 pixels beyond display edge.
+
+**Grid algorithm:** For N windows on a display:
+- `cols = Math.ceil(Math.sqrt(N))`
+- `rows = Math.ceil(N / cols)`
+- Column-major layout: `row = floor(i / cols)`, `col = i % cols`
+- Example: 5 windows → 3 cols × 2 rows (3 in top row, 2 in bottom row)
+
