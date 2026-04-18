@@ -58,6 +58,37 @@
 
 **See:** Full discovery details in implementation PR, SDK Docs at https://agentclientprotocol.github.io/typescript-sdk
 
+### 2026-04-18: Explode Multi-Window Tiling — Reposition Existing Windows
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Implemented  
+**Tags:** #ui #windows #bugfix
+
+**What:** Root cause of overlapping windows in Explode multi-window feature was NOT the tiling algorithm — it was `WindowManager.popOut()` ignoring the bounds parameter for already-existing windows.
+
+**Root Cause:** When users manually popped out sessions then clicked Explode, `popOut()` would focus existing windows but not reposition them via `setBounds()`. Windows remained at their original cascaded positions.
+
+**Decision:** Modify `popOut()` to call `setBounds()` when explicit bounds are provided, even for existing windows.
+
+**Implementation:**
+- Added `if (bounds) { existing.setBounds({...}) }` check in popOut() for existing window path
+- Transparent API: call site (`useExplode`) doesn't need to know if window exists
+- No breaking changes: existing callers without bounds param unaffected
+
+**Testing:**
+- Added `tests/explode-bounds.spec.ts` e2e diagnostic test
+- Asserts: all windows within display workArea, pairwise non-overlap
+- Test failed BEFORE fix (all windows at x=763, y=332), passes AFTER fix
+- All 24 unit tiling tests pass, 6 multi-window regression tests pass, build green
+
+**Files Changed:** `src/main/window/WindowManager.ts`, `tests/explode-bounds.spec.ts`
+
+**Related Work:** Livingston's bounds-clamping fix (commit 26c116e) addressed algorithm precision. This fix addresses application of algorithm results to existing windows. Together they ensure: (1) Tile positions never exceed display bounds (algorithm), (2) Positions are actually applied to all windows (application).
+
+**Key Learnings:**
+- BrowserWindow constructor bounds only apply during creation. Existing windows require `setBounds()` or `setPosition()` + `setSize()`
+- Always use `display.workArea` (excludes taskbar), not `display.bounds` which includes taskbar area
+- Electron enforces `minWidth: 400, minHeight: 300` — will silently enlarge windows violating minimums, causing overlap. Known limitation with 16+ windows on smaller displays.
+
 ## Governance
 
 - All meaningful changes require team consensus

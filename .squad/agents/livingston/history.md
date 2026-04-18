@@ -224,3 +224,5 @@ This ensures windows NEVER exceed display bounds, even with floating-point round
 - Column-major layout: `row = floor(i / cols)`, `col = i % cols`
 - Example: 5 windows → 3 cols × 2 rows (3 in top row, 2 in bottom row)
 
+**UPDATE (2026-04-18):** This fix addressed floating-point rounding in the algorithm itself, but the real root cause of persistent user complaints was elsewhere. Danny discovered that `WindowManager.popOut()` was ignoring the bounds parameter for already-existing windows. See 2026-04-18 Explode Multi-Window Tiling entry for the complete fix. **Key insight:** The algorithm fix was correct but insufficient — we needed BOTH algorithm correctness (your fix) AND application of results to existing windows (Danny's fix).
+
