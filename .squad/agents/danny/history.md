@@ -178,3 +178,57 @@
 - ✅ P4.4: Session remote fields
 - ✅ P4.4: SessionKind extension
 - ✅ P4.4: AgentStoreData version bump
+
+### 2026-04-18 — Explode Multi-Window Tile Overlap Fix
+
+**Root Cause**
+Livingston's previous fix (26c116e) added bounds-clamping to `computeTileLayout()` to prevent windows from exceeding display bounds. However, windows were still overlapping when Explode was triggered on ALREADY-POPPED-OUT windows. The tiling algorithm was correct — the bug was in how tile positions were applied.
+
+**Diagnosis Process**
+1. Analyzed the call chain: `useExplode.ts` → `windowHandlers.ts` (getDisplays) → `WindowManager.popOut()` → BrowserWindow constructor
+2. Found that `getDisplays()` correctly returns `display.workArea` (excludes taskbar)
+3. Discovered the critical bug in `WindowManager.popOut()` (line 64-73): When a window already exists, it only focused it and **ignored** the new bounds parameter
+4. Created diagnostic e2e test (`tests/explode-bounds.spec.ts`) that:
+   - Creates 5 sessions
+   - Pops them all out WITHOUT explicit bounds (simulating manual popout)
+   - Calls Explode logic with computed tile bounds
+   - Asserts no pairwise overlap and all windows within workArea
+5. Test confirmed: All windows had identical positions (x=763, y=332) — they were never repositioned
+
+**The Fix**
+Modified `WindowManager.popOut()` to call `setBounds()` when explicit bounds are provided, even for existing windows:
+
+```ts
+if (existing && !existing.isDestroyed()) {
+  if (existing.isMinimized()) existing.restore()
+  // NEW: Reposition existing window if bounds provided (for Explode tiling)
+  if (bounds) {
+    existing.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
+  }
+  existing.focus()
+  return existing
+}
+```
+
+**Impact**
+- Explode now correctly tiles ALL windows (new + existing)
+- No change to tiling algorithm — Livingston's bounds-clamping remains
+- New e2e test provides regression coverage
+
+**Key Files**
+- `src/main/window/WindowManager.ts` — The fix (line 74-79)
+- `tests/explode-bounds.spec.ts` — Diagnostic test with pairwise overlap detection
+- `src/shared/tiling.ts` — Unchanged (algorithm was already correct)
+
+**Testing**
+- ✅ All 24 tiling unit tests pass
+- ✅ New explode-bounds e2e test passes (detects overlaps via pairwise rect intersection)
+- ✅ All 6 multi-window e2e tests pass
+- ✅ Manual verification: 5 windows tile in 3×2 grid without overlap
+
+**Electron Window Sizing Pitfalls**
+1. **BrowserWindow constructor ignores bounds after creation** — The constructor's `x, y, width, height` params only apply ONCE. To reposition an existing window, you MUST call `setBounds()` or `setPosition()` + `setSize()`.
+2. **workArea vs bounds** — Always use `display.workArea` for tiling calculations. `display.bounds` includes the taskbar area and will cause windows to be obscured.
+3. **minWidth/minHeight enforcement** — Electron silently enlarges windows that violate constraints (400×300). With 16+ windows on 1920×1080, each window gets ~240px width, violating minWidth. Electron enlarges them → unavoidable overlap. This is expected behavior, not a bug.
+4. **Floating-point rounding** — Window positions/sizes are integers, but tiling math uses floats. Always `Math.floor()` final values to prevent 1-2px spillover that triggers constraint violations.
+5. **Parent window relationships** — Popout windows created with `parent: mainWindow` will be closed when parent closes. This is desired for Tangent's popout model.
