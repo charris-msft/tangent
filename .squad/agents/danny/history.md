@@ -373,3 +373,38 @@ When Brady reported "Explode still broken", my first test (explode-bounds.spec.t
 **Pattern recommendation:** When prior async fixes keep missing real bugs (1→2→3 sequence), consider parallel independent diagnosis. Two different models with different debugging techniques can each find blind spots the other would have missed.
 
 
+
+
+---
+
+## 2026-04-18: Explode refinements — main stays, font preserved
+
+**Requested by Brady.** Two refinements on 09793b0:
+
+### #1 Main window stays put
+Replaced sentinel-tile approach with exclusion-rect approach. computeTileLayout now accepts exclusions: ExclusionRect[]. useExplode reads getMainBounds() and passes main's current rect as the exclusion. The tile grid grows (totalCells += deficit + 1, up to 8 attempts) until N cells avoid the exclusion. Graceful fallback if main covers the display.
+
+**Key insight:** skip-cell generalizes over shrink-workArea — handles centered-main case, which shrink-workArea cannot. Convergence is fast because each added cell only slightly shrinks the rest.
+
+### #2 Font size preserved in popouts
+Root cause: PopoutWindowShell hardcoded fontSize={14}. Fix: load config.fontSize on mount, subscribe to config.onChanged. Also hydrated fontSize in App.tsx from config on startup to prevent main/popout drift across restarts.
+
+**Confirmed:** fitAddon.fit() does not rescale font — only rows/cols. The user's "font changes on resize" complaint was really "popout used a different initial font size."
+
+### Learnings
+
+- **Invariant framing matters:** "never move main" + "popouts non-overlap with all obstacles" is a cleaner decomposition than "everything participates in a grid." Route around obstacles instead of forcing them into the layout.
+- **Grid growth with filter is robust:** for geometric constraint satisfaction with N items and K obstacles, grow the candidate set rather than solving the placement problem exactly. Bounded by iteration cap + fallback.
+- **Hardcoded defaults in shared components are a smell:** PopoutWindowShell pulled fontSize=14 out of the air. Anywhere you see a magic number for user-facing state, check whether that state lives in config.
+- **E2E test now captures main bounds BEFORE Explode, asserts unchanged AFTER.** That test would have caught both the prior buggy direction (moved main) and the current correct behavior.
+
+### Files changed
+- src/shared/tiling.ts, src/shared/__tests__/tiling.test.ts
+- src/renderer/hooks/useExplode.ts
+- src/main/window/WindowManager.ts, src/main/ipc/windowHandlers.ts, src/preload/index.ts
+- src/renderer/components/PopoutWindowShell.tsx, src/renderer/App.tsx
+- tests/explode-bounds.spec.ts
+
+**Tests:** 32/32 tiling unit, 92/92 shared unit, e2e green (main bounds unchanged; 17 popouts non-overlapping with main).
+
+**Commits:** 2b26208 (explode), 444e945 (font).
