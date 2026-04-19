@@ -146,6 +146,89 @@ Old assertion space (popouts only) is retired. This test would have caught the b
 
 **Files Changed:** `src/main/window/WindowManager.ts`, `src/main/ipc/windowHandlers.ts`, `src/preload/index.ts`, `src/renderer/hooks/useExplode.ts`, `tests/explode-bounds.spec.ts`
 
+### 2026-04-19: Explode Refinement #1 — Exclusion-Rect Tiling (Keep Main in Place)
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Implemented  
+**Tags:** #ui #windows #explode #refinement
+
+**Problem:** After main window was included in Explode grid, popouts would overlap it during repositioning.
+
+**Root Cause:** Tiling algorithm computed tile positions as if entire display was available. No mechanism to "reserve" main window's current location.
+
+**Decision:** Replace sentinel-tile approach with exclusion-rect approach:
+- `computeTileLayout()` now accepts optional `excludeRect?: Rect` parameter
+- Algorithm checks each tile position against exclusion bounds
+- Grid grows to accommodate N cells while avoiding excluded area
+- Main window position becomes hard constraint in layout
+
+**Implementation:**
+- Modified `src/shared/tiling.ts` — exclusion-rect parameter in computeTileLayout
+- Updated `src/renderer/hooks/useExplode.ts` — fetch main bounds, pass as exclusion
+- Added 8 test cases for exclusion scenarios in `tiling.test.ts` (32/32 passing)
+
+**Key Design Decision:** Main window is NOT moved during Explode. It remains visible and functional as the "hub" cell. Popouts tile around its current location.
+
+**Trade-off (Architect Named):** When main covers >50% of display, grid returns fewer cells than requested. Graceful degradation over silent overlap.
+
+**Files Changed:** `src/shared/tiling.ts`, `src/renderer/hooks/useExplode.ts`, `src/shared/__tests__/tiling.test.ts`
+
+**Related Commits:** `2b26208`
+
+### 2026-04-19: Explode Refinement #2 — Font Size Preservation in Popouts
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Implemented  
+**Tags:** #ui #terminal #popout #refinement
+
+**Problem:** Popout windows would reset to hardcoded `fontSize={14}`, losing user's configured font size.
+
+**Root Cause:** `PopoutWindowShell.tsx` had hardcoded font size. No subscription to config changes.
+
+**Decision:** All terminal instances (main + popout) read font size from single config source.
+
+**Implementation:**
+- Read `config.fontSize` on popout mount
+- Subscribe to config change events in popout
+- Gracefully update terminal when config changes
+- Main window already subscribed (no changes needed)
+
+**Key Design Decision:** Font size is user-configured and must not be rescaled by popout logic. Config is the authority; all instances follow it.
+
+**Files Changed:** `src/renderer/components/PopoutWindowShell.tsx`, `src/renderer/hooks/useExplode.ts`
+
+**Related Commits:** `444e945`
+
+### 2026-04-19: Explode Refinement #3 — Terminal Mirroring in Dual Windows
+**By:** Livingston (Integration Dev)  
+**Status:** ✅ Implemented  
+**Tags:** #ui #terminal #pty #refinement
+
+**Problem:** When a session was popped out, terminal content appeared ONLY in popout window. Main window lost visibility into session activity.
+
+**Root Cause:** IPC infrastructure was already broadcasting to both windows, but UI blockers (placeholder overlays) prevented dual rendering. Resize ownership was undefined — both windows tried to size the PTY.
+
+**Decision:** Mirror terminal content (both windows render same stream) + coordinate resize ownership.
+
+**Implementation:**
+- Both main window tab AND popout render same PTY stream (mirrored)
+- Removed placeholder overlays blocking dual rendering
+- **Popout owns PTY sizing when open** — sends resize events; main scrolls
+- Main reclaims ownership if popout closes unexpectedly
+- Extended `SessionManager` to track both renderers per session
+
+**Key Design Decision:** 
+1. **Mirror not move:** Session is mirrored (both render) vs. moved (one renders)
+2. **Popout owns sizing:** When popout open, it dictates PTY dimensions. Main observes, doesn't force resize. Prevents thrash.
+3. **Graceful fallback:** If popout closes unexpectedly, main gracefully takes sizing ownership again.
+
+**Rationale for Sizing Ownership:** Multiple windows rendering same content must coordinate sizing to avoid:
+- Simultaneous resize requests (PTY thrash)
+- Conflicting terminal dimensions
+- Scrollback corruption
+
+**Files Changed:** `src/main/terminal/TerminalManager.ts`, `src/main/session/SessionManager.ts`, `src/renderer/components/Terminal.tsx`, `src/renderer/components/PopoutWindow.tsx`, `src/main/window/WindowManager.ts`, `tests/terminal-mirror.spec.ts`
+
+**Related Commits:** `500fc15`
+
 ## Governance
 
 - All meaningful changes require team consensus

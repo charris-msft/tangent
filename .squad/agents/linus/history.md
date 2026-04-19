@@ -89,3 +89,22 @@ Implemented two critical features for remote agent orchestration:
 - Write formatted text directly to xterm.js instance (already human-readable, no parsing needed)
 - UI can still consume raw `acp:message` for structured rendering (e.g., tool execution panels)
 
+### 2026-04-19: Terminal Mirroring Backend Note (Context for Integration)
+
+From Livingston's refinement #3 (dual-window terminal rendering):
+
+**Architecture pattern to know:**
+- Both main and popout windows receive the same PTY stream simultaneously (mirrored)
+- `TerminalManager` broadcasts writes to both BrowserWindow instances
+- `SessionManager` tracks dual renderers per session
+- **Popout owns PTY sizing when open** (prevents resize thrash)
+- Main reclaims sizing if popout closes
+
+**For remote agent integration:**
+This mirroring pattern applies to remote sessions too. When a remote ACP session is in a popout:
+1. ACP output (from remote Dev Box) streams through `TerminalManager` (same path as local PTY writes)
+2. Both windows automatically receive identical output (no duplication needed in agent logic)
+3. Popout's terminal resize → PTY size update (already coordinated at IPC level)
+
+**No backend changes needed** — existing IPC patterns for session terminal updates work identically for both local and remote agents. Mirroring is transparent at the manager level.
+

@@ -1163,3 +1163,21 @@ local → devtunnel (remote:3000 → localhost:port) → ACP directly
 
 **Test Impact:** 20 tests now failing due to DevTunnelManager API change. Basher will fix test mocks to expect DevTunnelPorts instead of number.
 
+### 2026-04-19: Terminal Mirroring Note (Context for Backend Integration)
+
+**From Livingston's refinement #3:**
+
+Main + popout windows now receive the same PTY stream simultaneously (mirrored rendering, not moved). Key architectural point for backend integration:
+
+- `TerminalManager.broadcast()` sends writes to both windows
+- `SessionManager` tracks dual-window renderers per session
+- **Popout owns PTY sizing** when open; main observes and adapts
+- Main regains sizing ownership if popout closes unexpectedly
+
+**Implication for remote agents:** Both local and remote sessions will follow this same mirroring pattern. When a remote session is popped out:
+1. ACP output streams to TerminalManager (same as local PTY)
+2. Both windows mirror the same output (no duplication in agent response logic)
+3. Popout's terminal dimensions drive PTY sizing (already coordinated at IPC level)
+
+**No changes needed** — existing AcpClient message forwarding to TerminalManager works as-is. Both windows automatically render without special remote logic.
+

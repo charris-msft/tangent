@@ -259,3 +259,28 @@ Created `src/main/devbox/__tests__/integration.test.ts` with 33 tests (all passi
 4. Test timeouts should exceed code-under-test timeouts to avoid false negatives
 5. State transition tests are fragile — document expected state flow in test names
 
+### 2026-04-19: Exclusion-Rect Tiling Invariant (New Tester Checklist)
+
+From Danny's refinement #1 (Explode keeps main window in place):
+
+**New architectural invariant to validate in Explode tests:**
+
+When Explode runs with the exclusion-rect approach:
+1. **Main window position is preserved** — exact same bounds before/after Explode (x, y, width, height unchanged)
+2. **Popouts tile around main** — no popout overlaps main window's exclusion rect
+3. **Graceful degradation** — if main covers >50% of display, grid returns fewer cells (not fewer cells + overlap)
+4. **No resizing of main** — main window is never repositioned or resized by Explode
+
+**Test Coverage (Danny's work):**
+- `tests/explode-bounds.spec.ts`: Captures main bounds before/after, asserts unchanged
+- `src/shared/__tests__/tiling.test.ts`: 8 new exclusion-rect tests (32/32 passing)
+  - Main at center → popouts tile around edges
+  - Main at corner → popouts use remaining space
+  - Main covers >50% → fewer cells returned
+  - Invalid exclusion rect → silently ignored
+
+**For future Explode bugs:**
+- Always capture ALL windows in overlap assertion, not filtered subset (lesson from prior bug: assertion on popout-only subset missed overlap with main)
+- Verify exclusion rect is correctly computed from main's actual bounds (common bug: stale/default bounds instead of current position)
+- Test with Brady's multi-monitor setup: verify tiles respect display.workArea (excludes taskbar)
+
