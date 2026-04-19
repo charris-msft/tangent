@@ -75,6 +75,24 @@ export class WindowManager extends EventEmitter {
     return null
   }
 
+  /**
+   * Current main window bounds in screen coordinates, or null if the main
+   * window is unavailable or minimized. Used by Explode to tile popouts
+   * AROUND the main window without moving it.
+   */
+  getMainBounds(): { x: number; y: number; width: number; height: number } | null {
+    const main = this.getMainWindow()
+    if (!main) return null
+    try {
+      if (main.isMinimized()) return null
+      const b = main.getBounds()
+      return { x: b.x, y: b.y, width: b.width, height: b.height }
+    } catch (err) {
+      console.error('[WindowManager] Failed to get main bounds:', err)
+      return null
+    }
+  }
+
   isPoppedOut(sessionId: string): boolean {
     const win = this.popouts.get(sessionId)
     return !!(win && !win.isDestroyed())

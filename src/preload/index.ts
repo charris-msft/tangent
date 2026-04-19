@@ -204,6 +204,8 @@ const tangentAPI = {
       ipcRenderer.invoke('window:popOut', sessionId, bounds),
     setMainBounds: (bounds: { x: number; y: number; width: number; height: number }): Promise<boolean> =>
       ipcRenderer.invoke('window:setMainBounds', bounds),
+    getMainBounds: (): Promise<{ x: number; y: number; width: number; height: number } | null> =>
+      ipcRenderer.invoke('window:getMainBounds'),
     pullBack: (sessionId: string): Promise<void> => ipcRenderer.invoke('window:pullBack', sessionId),
     collapseAll: (): Promise<void> => ipcRenderer.invoke('window:collapseAll'),
     isPoppedOut: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('window:isPoppedOut', sessionId),

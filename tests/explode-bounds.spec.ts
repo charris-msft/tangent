@@ -21,16 +21,26 @@ function rectsOverlap(a: any, b: any): boolean {
 }
 
 test.describe('Explode multi-window tiling', () => {
-  test('5 sessions + main window tile without overlap and stay on the target display', async () => {
-    // 1) Get display info
+  test('main window is NOT moved; popouts tile around it without overlap', async () => {
+    // 1) Capture main window bounds BEFORE explode
+    const mainBefore = await app.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows().find(
+        (w) => !w.webContents.getURL().includes('mode=popout')
+      )
+      if (!main) return null
+      const b = main.getBounds()
+      return { id: main.id, x: b.x, y: b.y, width: b.width, height: b.height }
+    })
+    expect(mainBefore).toBeTruthy()
+
+    // 2) Target display info (workArea)
     const displays = await page.evaluate(async () => {
       return await (window as any).tangentAPI?.window?.getDisplays?.()
     })
-    expect(displays).toBeDefined()
     expect(displays.length).toBeGreaterThan(0)
     const primaryDisplay = displays.find((d: any) => d.isPrimary) || displays[0]
 
-    // 2) Create 5 sessions
+    // 3) Create 5 sessions
     for (let i = 0; i < 5; i++) {
       await page.evaluate(async () => {
         await (window as any).tangentAPI?.session?.create?.()
@@ -42,27 +52,60 @@ test.describe('Explode multi-window tiling', () => {
       const sessions = await (window as any).tangentAPI?.session?.getAll?.()
       return (sessions ?? []).filter((s: any) => s.status !== 'exited').map((s: any) => s.id)
     })
-    console.log('Eligible sessions:', sessionIds.length)
     expect(sessionIds.length).toBeGreaterThanOrEqual(5)
 
-    // 3) Drive the REAL useExplode flow through the renderer — this exercises
-    //    the production code path including the main-window tile reservation.
+    // 4) Drive the REAL useExplode flow: compute layout with main bounds as
+    //    exclusion, pop out each session. (Mirrors useExplode.ts logic so the
+    //    test exercises production IPC.)
     await page.evaluate(
       async (args: { displayId: number }) => {
         const api = (window as any).tangentAPI.window
-        const displays = await api.getDisplays()
-        const target = displays.filter((d: any) => d.id === args.displayId)
+        const allDisplays = await api.getDisplays()
+        const target = allDisplays.filter((d: any) => d.id === args.displayId)
         const all = await (window as any).tangentAPI.session.getAll()
         const sessionIds = (all ?? [])
           .filter((s: any) => s.status !== 'exited')
           .map((s: any) => s.id)
 
-        // Inline computeTileLayout (same math as @shared/tiling) for N+1 cells.
-        const MAIN = '__tangent_main_window__'
-        const ids = [MAIN, ...sessionIds]
+        // Fetch main bounds; use as exclusion if on target display.
+        const mb = await api.getMainBounds()
+        let exclusions: any[] = []
+        if (mb) {
+          const host = target.find((d: any) => {
+            const cx = mb.x + mb.width / 2
+            const cy = mb.y + mb.height / 2
+            return cx >= d.x && cx < d.x + d.width && cy >= d.y && cy < d.y + d.height
+          })
+          if (host) exclusions = [{ displayId: host.id, ...mb }]
+        }
+
+        // Inline computeTileLayout with exclusion support
+        function rectsOverlap(a: any, b: any) {
+          return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+        }
+        function generateCells(totalCells: number, display: any, pad: number, outer: number) {
+          const cols = Math.ceil(Math.sqrt(totalCells))
+          const rows = Math.ceil(totalCells / cols)
+          const aW = display.width - 2 * outer
+          const aH = display.height - 2 * outer
+          const cW = (aW - (cols - 1) * pad) / cols
+          const cH = (aH - (rows - 1) * pad) / rows
+          const out: any[] = []
+          for (let i = 0; i < totalCells; i++) {
+            const row = Math.floor(i / cols)
+            const col = i % cols
+            const x = Math.floor(display.x + outer + col * (cW + pad))
+            const y = Math.floor(display.y + outer + row * (cH + pad))
+            const w = Math.min(Math.floor(cW), display.x + display.width - x)
+            const h = Math.min(Math.floor(cH), display.y + display.height - y)
+            out.push({ x, y, width: w, height: h })
+          }
+          return out
+        }
+
         const padding = 8
         const outerPadding = 8
-        const n = ids.length
+        const n = sessionIds.length
         const m = target.length
         const base = Math.floor(n / m)
         const remainder = n - base * m
@@ -72,30 +115,21 @@ test.describe('Explode multi-window tiling', () => {
           const count = base + (d < remainder ? 1 : 0)
           if (count === 0) continue
           const display = target[d]
-          const cols = Math.ceil(Math.sqrt(count))
-          const rows = Math.ceil(count / cols)
-          const availW = display.width - 2 * outerPadding
-          const availH = display.height - 2 * outerPadding
-          const cw = (availW - (cols - 1) * padding) / cols
-          const ch = (availH - (rows - 1) * padding) / rows
-          for (let i = 0; i < count; i++) {
-            const row = Math.floor(i / cols)
-            const col = i % cols
-            const x = Math.floor(display.x + outerPadding + col * (cw + padding))
-            const y = Math.floor(display.y + outerPadding + row * (ch + padding))
-            const w = Math.min(Math.floor(cw), display.x + display.width - x)
-            const h = Math.min(Math.floor(ch), display.y + display.height - y)
-            positions.push({ sessionId: ids[cursor++], x, y, width: w, height: h })
+          const myEx = exclusions.filter((e: any) => e.displayId === display.id)
+          let totalCells = count
+          let usable: any[] = []
+          for (let attempt = 0; attempt < 8; attempt++) {
+            const cells = generateCells(totalCells, display, padding, outerPadding)
+            usable = myEx.length === 0 ? cells : cells.filter((c: any) => !myEx.some((ex: any) => rectsOverlap(c, ex)))
+            if (usable.length >= count) break
+            totalCells = totalCells + (count - usable.length) + 1
+          }
+          for (let i = 0; i < count && i < usable.length; i++) {
+            positions.push({ sessionId: sessionIds[cursor++], ...usable[i] })
           }
         }
 
-        // Apply: main first, then popouts
-        const mainTile = positions.find((t: any) => t.sessionId === MAIN)
-        if (mainTile) {
-          await api.setMainBounds({ x: mainTile.x, y: mainTile.y, width: mainTile.width, height: mainTile.height })
-        }
         for (const t of positions) {
-          if (t.sessionId === MAIN) continue
           await api.popOut(t.sessionId, { x: t.x, y: t.y, width: t.width, height: t.height })
         }
       },
@@ -104,7 +138,7 @@ test.describe('Explode multi-window tiling', () => {
 
     await page.waitForTimeout(2000)
 
-    // 4) Collect ACTUAL bounds for EVERY window (main + popouts)
+    // 5) Collect ACTUAL bounds for EVERY window (main + popouts) — no filtering
     const actualBounds = await app.evaluate(({ BrowserWindow, screen }) => {
       return BrowserWindow.getAllWindows().map((w) => {
         const b = w.getBounds()
@@ -130,18 +164,29 @@ test.describe('Explode multi-window tiling', () => {
       )
     )
 
-    const onTarget = actualBounds.filter((w: any) => w.displayId === primaryDisplay.id)
-    expect(onTarget.length).toBeGreaterThanOrEqual(6) // 5 popouts + 1 main
+    // 6) ASSERT 1: main window bounds UNCHANGED
+    const mainAfter = actualBounds.find((w: any) => !w.isPopout)
+    expect(mainAfter, 'main window must still exist').toBeTruthy()
+    expect(mainAfter!.id).toBe(mainBefore!.id)
+    expect(mainAfter!.x).toBe(mainBefore!.x)
+    expect(mainAfter!.y).toBe(mainBefore!.y)
+    expect(mainAfter!.width).toBe(mainBefore!.width)
+    expect(mainAfter!.height).toBe(mainBefore!.height)
 
-    // 5) ASSERT 1: every window fits inside the target display workArea
-    for (const w of onTarget) {
-      expect(w.x, `window id=${w.id} off left`).toBeGreaterThanOrEqual(primaryDisplay.x)
-      expect(w.y, `window id=${w.id} off top`).toBeGreaterThanOrEqual(primaryDisplay.y)
-      expect(w.x + w.width, `window id=${w.id} off right`).toBeLessThanOrEqual(primaryDisplay.x + primaryDisplay.width)
-      expect(w.y + w.height, `window id=${w.id} off bottom`).toBeLessThanOrEqual(primaryDisplay.y + primaryDisplay.height)
+    const popouts = actualBounds.filter((w: any) => w.isPopout && w.displayId === primaryDisplay.id)
+    expect(popouts.length).toBeGreaterThanOrEqual(5)
+
+    // 7) ASSERT 2: every popout fits inside the target display workArea
+    for (const w of popouts) {
+      expect(w.x, `popout id=${w.id} off left`).toBeGreaterThanOrEqual(primaryDisplay.x)
+      expect(w.y, `popout id=${w.id} off top`).toBeGreaterThanOrEqual(primaryDisplay.y)
+      expect(w.x + w.width, `popout id=${w.id} off right`).toBeLessThanOrEqual(primaryDisplay.x + primaryDisplay.width)
+      expect(w.y + w.height, `popout id=${w.id} off bottom`).toBeLessThanOrEqual(primaryDisplay.y + primaryDisplay.height)
     }
 
-    // 6) ASSERT 2: pairwise non-overlap across ALL windows (main included)
+    // 8) ASSERT 3: pairwise non-overlap across ALL windows (main included).
+    //    Skip only when main is on a different display than the popouts.
+    const onTarget = actualBounds.filter((w: any) => w.displayId === primaryDisplay.id)
     const overlaps: string[] = []
     for (let i = 0; i < onTarget.length; i++) {
       for (let j = i + 1; j < onTarget.length; j++) {
@@ -149,11 +194,11 @@ test.describe('Explode multi-window tiling', () => {
         const b = onTarget[j]
         if (rectsOverlap(a, b)) {
           overlaps.push(
-            `id=${a.id} (${a.x},${a.y} ${a.width}x${a.height}) overlaps id=${b.id} (${b.x},${b.y} ${b.width}x${b.height})`
+            `id=${a.id} popout=${a.isPopout} (${a.x},${a.y} ${a.width}x${a.height}) overlaps id=${b.id} popout=${b.isPopout} (${b.x},${b.y} ${b.width}x${b.height})`
           )
         }
       }
     }
     expect(overlaps, `Overlaps detected:\n${overlaps.join('\n')}`).toHaveLength(0)
   })
-})
+})

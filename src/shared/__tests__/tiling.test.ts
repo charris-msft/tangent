@@ -144,4 +144,65 @@ describe('computeTileLayout', () => {
       }
     }
   });
+
+  describe('exclusion rects (tile around main window)', () => {
+    function rectsOverlap(a: any, b: any) {
+      return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    }
+
+    it('no exclusion → behavior unchanged', () => {
+      const base = computeTileLayout(['a', 'b', 'c', 'd'], [display1]);
+      const withEmpty = computeTileLayout(['a', 'b', 'c', 'd'], [display1], { exclusions: [] });
+      expect(withEmpty).toEqual(base);
+    });
+
+    it('exclusion on a different display is ignored', () => {
+      const base = computeTileLayout(['a', 'b', 'c', 'd'], [display1]);
+      const withOther = computeTileLayout(['a', 'b', 'c', 'd'], [display1], {
+        exclusions: [{ displayId: 99, x: 0, y: 0, width: 500, height: 500 }],
+      });
+      expect(withOther).toEqual(base);
+    });
+
+    it.each([
+      { n: 3 }, { n: 4 }, { n: 5 }, { n: 6 }, { n: 8 },
+    ])('$n popouts do not overlap an edge exclusion rect', ({ n }) => {
+      const sessions = Array.from({ length: n }, (_, i) => `s${i}`);
+      // Main window on the left edge, ~30% of width
+      const exclusion = { displayId: display1.id, x: 0, y: 0, width: 600, height: 900 };
+      const result = computeTileLayout(sessions, [display1], { exclusions: [exclusion] });
+      expect(result).toHaveLength(n);
+      for (const p of result) {
+        expect(rectsOverlap(p, exclusion)).toBe(false);
+        // stays within display
+        expect(p.x).toBeGreaterThanOrEqual(display1.x);
+        expect(p.y).toBeGreaterThanOrEqual(display1.y);
+        expect(p.x + p.width).toBeLessThanOrEqual(display1.x + display1.width);
+        expect(p.y + p.height).toBeLessThanOrEqual(display1.y + display1.height);
+      }
+      // pairwise non-overlap
+      for (let i = 0; i < result.length; i++) {
+        for (let j = i + 1; j < result.length; j++) {
+          expect(rectsOverlap(result[i], result[j])).toBe(false);
+        }
+      }
+    });
+
+    it('centered exclusion forces grid to grow; all cells miss the main rect', () => {
+      const sessions = ['a', 'b', 'c', 'd'];
+      // Main window centered, ~30%×30%
+      const exclusion = {
+        displayId: display1.id,
+        x: 700,
+        y: 400,
+        width: 500,
+        height: 300,
+      };
+      const result = computeTileLayout(sessions, [display1], { exclusions: [exclusion] });
+      expect(result).toHaveLength(4);
+      for (const p of result) {
+        expect(rectsOverlap(p, exclusion)).toBe(false);
+      }
+    });
+  });
 });

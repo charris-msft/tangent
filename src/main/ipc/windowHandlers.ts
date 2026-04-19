@@ -22,6 +22,15 @@ export function registerWindowHandlers(windowManager: WindowManager): void {
     }
   })
 
+  ipcMain.handle('window:getMainBounds', () => {
+    try {
+      return windowManager.getMainBounds()
+    } catch (err) {
+      console.error('[Tangent] window:getMainBounds failed:', err)
+      return null
+    }
+  })
+
   ipcMain.handle('window:pullBack', (_, sessionId: string) => {
     windowManager.pullBack(sessionId)
   })

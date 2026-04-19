@@ -1,22 +1,19 @@
 import { useCallback } from 'react'
-import { computeTileLayout, type DisplayBounds } from '@shared/tiling'
+import { computeTileLayout, type DisplayBounds, type ExclusionRect } from '@shared/tiling'
 import type { Session } from '@shared/types'
 
 /**
- * Sentinel session ID used to reserve a tile slot for the main Tangent
- * window. The main window participates in the grid so it doesn't end up
- * sitting on top of popouts (root cause of the overlap bug observed in
- * 2026-04-18 after two prior fix attempts).
- */
-const MAIN_WINDOW_TILE_SENTINEL = '__tangent_main_window__'
-
-/**
  * Returns an `explodeAll` function that tiles all non-exited sessions across
- * the user-selected displays. Sessions are popped out if not already.
- * Already-popped windows are repositioned to fit the tile layout.
+ * the user-selected displays. Sessions are popped out if not already;
+ * already-popped windows are repositioned to fit the tile layout.
  *
- * The main Tangent window is included in the tile grid as its own cell so
- * it does not overlap the popouts.
+ * The main Tangent window is NOT moved — Brady wants it to stay wherever
+ * the user put it. Instead we read its current bounds and pass them as an
+ * exclusion rect so popouts tile AROUND it. The layout grid grows as
+ * needed to still produce N non-overlapping cells.
+ *
+ * If the main window isn't on any selected display, no exclusion is
+ * applied and popouts tile the full workArea normally.
  */
 export function useExplode(sessions: Session[]) {
   return useCallback(
@@ -28,36 +25,33 @@ export function useExplode(sessions: Session[]) {
       const displays = allDisplays.filter((d) => selectedDisplayIds.includes(d.id))
       if (displays.length === 0) return
 
-      // Include ALL non-exited sessions in the tile layout, regardless of pop-out state
       const eligible = sessions.filter((s) => s.status !== 'exited')
       if (eligible.length === 0) return
 
       const sessionIds = eligible.map((s) => s.id)
 
-      // Reserve a tile slot for the main window as the FIRST cell. Popouts
-      // fill the remaining cells. This keeps the main window tiled alongside
-      // popouts and prevents it from covering them.
-      const idsWithMain = [MAIN_WINDOW_TILE_SENTINEL, ...sessionIds]
-      const layout = computeTileLayout(idsWithMain, displays)
-
-      // Move the main window to its reserved tile first.
-      const mainTile = layout.find((t) => t.sessionId === MAIN_WINDOW_TILE_SENTINEL)
-      if (mainTile && typeof winApi.setMainBounds === 'function') {
-        try {
-          await winApi.setMainBounds({
-            x: mainTile.x,
-            y: mainTile.y,
-            width: mainTile.width,
-            height: mainTile.height
+      // Read main window's current bounds. If it's on one of the selected
+      // displays, use it as an exclusion rect so popouts tile around it.
+      let exclusions: ExclusionRect[] = []
+      try {
+        const mainBounds = await winApi.getMainBounds?.()
+        if (mainBounds) {
+          const hostDisplay = displays.find((d) => {
+            const cx = mainBounds.x + mainBounds.width / 2
+            const cy = mainBounds.y + mainBounds.height / 2
+            return cx >= d.x && cx < d.x + d.width && cy >= d.y && cy < d.y + d.height
           })
-        } catch (err) {
-          console.warn('[useExplode] setMainBounds failed:', err)
+          if (hostDisplay) {
+            exclusions = [{ displayId: hostDisplay.id, ...mainBounds }]
+          }
         }
+      } catch (err) {
+        console.warn('[useExplode] getMainBounds failed, tiling without exclusion:', err)
       }
 
-      // Pop out (or reposition) each session window into its tile.
+      const layout = computeTileLayout(sessionIds, displays, { exclusions })
+
       for (const tile of layout) {
-        if (tile.sessionId === MAIN_WINDOW_TILE_SENTINEL) continue
         try {
           const ok = await winApi.popOut(tile.sessionId, {
             x: tile.x,
