@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import type { AgentProfile } from '@shared/types'
+import { DevBoxPicker } from '../DevBoxPicker'
 
 interface AgentFormProps {
   initialValues?: AgentProfile
@@ -19,6 +20,22 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
   const suggestionsRef = useRef<HTMLDivElement>(null)
   const cwdInputRef = useRef<HTMLInputElement>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+
+  // Remote execution state
+  const [remoteEnabled, setRemoteEnabled] = useState(initialValues?.remote?.enabled ?? false)
+  const [devBoxProject, setDevBoxProject] = useState(initialValues?.remote?.devBoxProject ?? '')
+  const [devBoxName, setDevBoxName] = useState(initialValues?.remote?.devBoxName ?? '')
+  const [repoPath, setRepoPath] = useState(initialValues?.remote?.repoPath ?? '')
+  const [sshUser, setSshUser] = useState(initialValues?.remote?.sshUser ?? '')
+  const [showDevBoxPicker, setShowDevBoxPicker] = useState(false)
+
+  // Set default SSH user to current user
+  useEffect(() => {
+    if (!sshUser && remoteEnabled) {
+      const currentUser = (window as any).tangentAPI?.app?.getUsername?.() || 'vscode'
+      setSshUser(currentUser)
+    }
+  }, [remoteEnabled, sshUser])
 
   const handleBrowseFolder = async () => {
     const selected = await (window as any).tangentAPI.dialog.openFolder()
@@ -114,6 +131,12 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  const handleDevBoxSelect = (devBox: { name: string; projectName: string }) => {
+    setDevBoxName(devBox.name)
+    setDevBoxProject(devBox.projectName)
+    setShowDevBoxPicker(false)
+  }
+
   const handleSave = () => {
     const trimmedName = name.trim()
     const trimmedCommand = command.trim()
@@ -133,6 +156,17 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
 
     if (initialValues?.env) {
       agent.env = initialValues.env
+    }
+
+    // Add remote configuration if enabled
+    if (remoteEnabled) {
+      agent.remote = {
+        enabled: true,
+        devBoxProject: devBoxProject.trim() || undefined,
+        devBoxName: devBoxName.trim() || undefined,
+        repoPath: repoPath.trim() || undefined,
+        sshUser: sshUser.trim() || undefined
+      }
     }
 
     onSave(agent)
@@ -254,6 +288,89 @@ export function AgentForm({ initialValues, onSave, onCancel }: AgentFormProps) {
           </div>
         )}
       </div>
+
+      {/* Remote Execution Section */}
+      <div className="mb-3 pb-3 border-t border-[var(--bg-hover)] pt-3">
+        <div className="flex items-center gap-2 mb-2">
+          <input
+            type="checkbox"
+            id="remoteEnabled"
+            checked={remoteEnabled}
+            onChange={(e) => setRemoteEnabled(e.target.checked)}
+            className="w-4 h-4 cursor-pointer"
+          />
+          <label
+            htmlFor="remoteEnabled"
+            className="text-xs cursor-pointer"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            Enable remote execution on Dev Box
+          </label>
+        </div>
+
+        {remoteEnabled && (
+          <div className="pl-6 space-y-2">
+            {/* Dev Box Selection */}
+            <div>
+              <label className="text-xs mb-0.5 block" style={{ color: 'var(--text-secondary)' }}>
+                Dev Box
+              </label>
+              <div className="flex gap-1 items-center">
+                <button
+                  type="button"
+                  onClick={() => setShowDevBoxPicker(true)}
+                  className="px-2 py-1 text-sm rounded border border-[var(--bg-hover)] hover:bg-[var(--bg-hover)] transition-colors"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  {devBoxName ? 'Change Dev Box' : 'Select Dev Box'}
+                </button>
+                {devBoxName && (
+                  <span className="text-xs" style={{ color: 'var(--text-primary)' }}>
+                    {devBoxName} <span style={{ color: 'var(--text-muted)' }}>({devBoxProject})</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Repo Path */}
+            <div>
+              <label className="text-xs mb-0.5 block" style={{ color: 'var(--text-secondary)' }}>
+                Repo Path on Dev Box
+              </label>
+              <input
+                type="text"
+                value={repoPath}
+                onChange={(e) => setRepoPath(e.target.value)}
+                placeholder="e.g. /home/vscode/workspace"
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+
+            {/* SSH User */}
+            <div>
+              <label className="text-xs mb-0.5 block" style={{ color: 'var(--text-secondary)' }}>
+                SSH User
+              </label>
+              <input
+                type="text"
+                value={sshUser}
+                onChange={(e) => setSshUser(e.target.value)}
+                placeholder="e.g. vscode"
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* DevBoxPicker Dialog */}
+      <DevBoxPicker
+        open={showDevBoxPicker}
+        onSelect={handleDevBoxSelect}
+        onCancel={() => setShowDevBoxPicker(false)}
+      />
 
       {/* Buttons */}
       <div className="flex gap-2">

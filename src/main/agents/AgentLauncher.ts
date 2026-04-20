@@ -2,6 +2,7 @@ import type { AgentProfile } from '@shared/types'
 import type { PtyManager } from '../pty/PtyManager'
 import type { SessionStore } from '../session/SessionStore'
 import type { SessionManager } from '../session/SessionManager'
+import type { RemoteSessionManager } from '../session/RemoteSessionManager'
 import { existsSync } from 'fs'
 
 function psEscape(value: string): string {
@@ -27,10 +28,22 @@ export class AgentLauncher {
   constructor(
     private ptyManager: PtyManager,
     private sessionStore: SessionStore,
-    private sessionManager: SessionManager
+    private sessionManager: SessionManager,
+    private remoteSessionManager?: RemoteSessionManager
   ) {}
 
   launch(agent: AgentProfile, sessionId: string): void {
+    // P4.6: Check if this is a remote agent and delegate to RemoteSessionManager
+    if (agent.remote?.enabled) {
+      this._launchRemote(agent, sessionId)
+      return
+    }
+
+    // Original local launch path
+    this._launchLocal(agent, sessionId)
+  }
+
+  private _launchLocal(agent: AgentProfile, sessionId: string): void {
     let targetSessionId = sessionId
 
     if (agent.launchTarget === 'newTab') {
@@ -84,6 +97,54 @@ export class AgentLauncher {
     // For Copilot, attach the SDK to watch for the ui-server port
     if (isCopilot && this.sessionManager.sdkManager) {
       this.sessionManager.sdkManager.attachToSession(targetSessionId, targetSession.ptyId)
+    }
+  }
+
+  /**
+   * Launch an agent remotely on a Dev Box via RemoteSessionManager.
+   * P4.6: Remote agent routing
+   */
+  private async _launchRemote(agent: AgentProfile, sessionId: string): Promise<void> {
+    if (!this.remoteSessionManager) {
+      console.warn('[Tangent 2] AgentLauncher: Remote agent requested but RemoteSessionManager not available')
+      return
+    }
+
+    if (!agent.remote?.enabled) {
+      console.warn('[Tangent 2] AgentLauncher: _launchRemote called without remote.enabled')
+      return
+    }
+
+    // Determine target workspace path
+    let localPath: string
+
+    if (agent.launchTarget === 'path' && agent.cwdPath) {
+      // Use explicit path from agent profile
+      localPath = agent.cwdPath
+    } else {
+      // Use current session's folder path
+      const currentSession = this.sessionStore.get(sessionId)
+      if (!currentSession) {
+        console.warn('[Tangent 2] AgentLauncher: Current session not found for remote launch')
+        return
+      }
+      localPath = currentSession.folderPath
+    }
+
+    try {
+      console.log(`[Tangent 2] AgentLauncher: Launching remote agent ${agent.name} at ${localPath}`)
+      
+      // RemoteSessionManager handles full lifecycle:
+      // - Dev Box start
+      // - Provisioning check
+      // - Workspace sync
+      // - ACP session creation
+      await this.remoteSessionManager.createRemoteSession(agent, localPath)
+      
+      console.log(`[Tangent 2] AgentLauncher: Remote agent ${agent.name} launched successfully`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[Tangent 2] AgentLauncher: Remote launch failed:`, message)
     }
   }
 }

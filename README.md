@@ -1,4 +1,4 @@
-# Tangent
+# Tangent 2
 
 A standalone Electron terminal app with a built-in Agents sidebar. Launch AI agents (Copilot CLI, Claude Code) from the sidebar into terminal sessions.
 

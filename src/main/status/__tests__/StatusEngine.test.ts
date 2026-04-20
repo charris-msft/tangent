@@ -361,3 +361,128 @@ describe('StatusEngine OSC progress handling', () => {
     engine.dispose()
   })
 })
+
+describe('StatusEngine feedRemotePty', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function createRemoteSession(): { store: SessionStore; sessionId: string } {
+    const store = new SessionStore()
+    const session: Session = {
+      id: 'remote-test-1',
+      kind: 'remote-agent',
+      agentType: 'copilot-cli',
+      name: 'Remote Agent',
+      folderName: 'test',
+      folderPath: 'C:\\local\\test',
+      isRenamed: false,
+      status: 'agent_launching',
+      lastActivity: '',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      ptyId: '',
+      isExternal: false,
+      remoteState: 'running'
+    }
+    store.add(session)
+    return { store, sessionId: 'remote-test-1' }
+  }
+
+  it('feed() skips remote sessions entirely', () => {
+    const { store, sessionId } = createRemoteSession()
+    store.updateStatus(sessionId, 'agent_ready')
+    const engine = new StatusEngine(sessionId, '', store)
+
+    // OSC progress 3 via feed() should be ignored for remote sessions
+    engine.feed('\x1b]9;4;3;0\x07')
+    expect(store.get(sessionId)?.status).toBe('agent_ready') // unchanged
+
+    engine.dispose()
+  })
+
+  it('feedRemotePty() detects OSC progress (processing)', () => {
+    const { store, sessionId } = createRemoteSession()
+    store.updateStatus(sessionId, 'agent_ready')
+    const engine = new StatusEngine(sessionId, '', store)
+
+    // OSC 9;4;3;0 (indeterminate/thinking) via feedRemotePty
+    engine.feedRemotePty('\x1b]9;4;3;0\x07')
+    expect(store.get(sessionId)?.status).toBe('processing')
+
+    engine.dispose()
+  })
+
+  it('feedRemotePty() detects OSC progress (idle after debounce)', () => {
+    const { store, sessionId } = createRemoteSession()
+    store.updateStatus(sessionId, 'processing')
+    const engine = new StatusEngine(sessionId, '', store)
+
+    // OSC 9;4;0;0 (hidden/idle)
+    engine.feedRemotePty('\x1b]9;4;0;0\x07')
+    // Should not be idle yet (800ms debounce for agent sessions)
+    expect(store.get(sessionId)?.status).toBe('processing')
+
+    vi.advanceTimersByTime(800)
+    expect(store.get(sessionId)?.status).toBe('agent_ready')
+
+    engine.dispose()
+  })
+
+  it('feedRemotePty() detects title changes for lastActivity', () => {
+    const { store, sessionId } = createRemoteSession()
+    store.updateStatus(sessionId, 'agent_ready')
+    const engine = new StatusEngine(sessionId, '', store)
+
+    engine.feedRemotePty('\x1b]2;🤖 Analyzing code\x07')
+    expect(store.get(sessionId)?.lastActivity).toBe('Analyzing code')
+
+    engine.dispose()
+  })
+
+  it('feedRemotePty() does NOT update CWD (local paths protected)', () => {
+    const { store, sessionId } = createRemoteSession()
+    const engine = new StatusEngine(sessionId, '', store)
+
+    const originalPath = store.get(sessionId)?.folderPath
+
+    // OSC 9;9 CWD from Dev Box — should NOT change local path
+    engine.feedRemotePty('\x1b]9;9;C:\\Agents\\lego1\\project\x07')
+    expect(store.get(sessionId)?.folderPath).toBe(originalPath)
+
+    // OSC 7 CWD from Dev Box — should NOT change local path
+    engine.feedRemotePty('\x1b]7;file:///C:/Agents/lego1/project\x07')
+    expect(store.get(sessionId)?.folderPath).toBe(originalPath)
+
+    engine.dispose()
+  })
+
+  it('feedRemotePty() handles split OSC sequence across chunks', () => {
+    const { store, sessionId } = createRemoteSession()
+    store.updateStatus(sessionId, 'agent_ready')
+    const engine = new StatusEngine(sessionId, '', store)
+
+    // Split OSC 9;4;3;0 across two chunks
+    engine.feedRemotePty('\x1b]9;4;3')
+    expect(store.get(sessionId)?.status).toBe('agent_ready') // not yet
+
+    engine.feedRemotePty(';0\x07')
+    expect(store.get(sessionId)?.status).toBe('processing') // now detected
+
+    engine.dispose()
+  })
+
+  it('feedRemotePty() is no-op after dispose', () => {
+    const { store, sessionId } = createRemoteSession()
+    store.updateStatus(sessionId, 'agent_ready')
+    const engine = new StatusEngine(sessionId, '', store)
+
+    engine.dispose()
+    engine.feedRemotePty('\x1b]9;4;3;0\x07')
+    expect(store.get(sessionId)?.status).toBe('agent_ready') // unchanged
+  })
+})
