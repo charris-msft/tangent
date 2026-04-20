@@ -18,7 +18,7 @@ export interface KeyboardConfig {
 }
 
 /**
- * Global keyboard shortcut handler for Tangent.
+ * Global keyboard shortcut handler for Tangent 2.
  *
  * Shortcuts:
  *   Ctrl+B          Toggle sessions panel visibility

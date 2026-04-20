@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { mapStatusToUI } from '@shared/statusMapping'
-import type { Session } from '@shared/types'
+import type { Session, RemoteSessionState } from '@shared/types'
 
 interface SessionItemProps {
   session: Session
@@ -12,6 +12,25 @@ interface SessionItemProps {
   onRename: (name: string) => void
   onRenameCancel: () => void
   onCreateAgent?: () => void
+}
+
+const getRemoteStateIndicator = (state: RemoteSessionState): { emoji: string; color: string; label: string; animated: boolean } => {
+  switch (state) {
+    case 'starting-devbox':
+      return { emoji: '🔵', color: 'var(--accent)', label: 'Starting Dev Box', animated: true }
+    case 'tunneling':
+      return { emoji: '🔵', color: 'var(--accent)', label: 'Tunneling', animated: true }
+    case 'syncing-out':
+      return { emoji: '🟡', color: 'var(--idle)', label: 'Syncing workspace out', animated: true }
+    case 'syncing-back':
+      return { emoji: '🟡', color: 'var(--idle)', label: 'Syncing workspace back', animated: true }
+    case 'verifying-acp':
+      return { emoji: '🔵', color: 'var(--accent)', label: 'Verifying ACP', animated: true }
+    case 'running':
+      return { emoji: '🟢', color: 'var(--running)', label: 'Running on Dev Box', animated: false }
+    default:
+      return { emoji: '⚫', color: 'var(--text-muted)', label: 'Unknown', animated: false }
+  }
 }
 
 export function SessionItem({
@@ -29,6 +48,11 @@ export function SessionItem({
   const [renameValue, setRenameValue] = useState(session.name)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [showTooltip, setShowTooltip] = useState(false)
+  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+
+  const isRemoteSession = session.kind === 'remote-agent'
+  const remoteIndicator = isRemoteSession && session.remoteState ? getRemoteStateIndicator(session.remoteState) : null
 
   const bgStyle = isActive ? ui.bgTintSelected : ui.bgTint
   const borderLeft = ui.barColor ? `3px solid var(${ui.barColor})` : '3px solid transparent'
@@ -134,6 +158,25 @@ export function SessionItem({
               >
                 {session.agentType === 'copilot-cli' ? 'copilot' : session.agentType === 'claude-code' ? 'claude' : 'shell'}
               </span>
+              {/* Remote badge */}
+              {isRemoteSession && (
+                <span
+                  className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 relative"
+                  style={{
+                    background: 'var(--accent)',
+                    color: '#fff'
+                  }}
+                  onMouseEnter={() => {
+                    tooltipTimeoutRef.current = setTimeout(() => setShowTooltip(true), 500)
+                  }}
+                  onMouseLeave={() => {
+                    if (tooltipTimeoutRef.current) clearTimeout(tooltipTimeoutRef.current)
+                    setShowTooltip(false)
+                  }}
+                >
+                  Remote
+                </span>
+              )}
               {/* External badge */}
               {session.isExternal && (
                 <span
@@ -143,17 +186,78 @@ export function SessionItem({
                   ext
                 </span>
               )}
+              {/* Remote state indicator */}
+              {remoteIndicator && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${remoteIndicator.animated ? 'animate-pulse-slow' : ''}`}
+                  style={{
+                    background: 'rgba(88, 166, 255, 0.1)',
+                    color: remoteIndicator.color
+                  }}
+                >
+                  {remoteIndicator.emoji} {remoteIndicator.label}
+                </span>
+              )}
             </>
           )}
         </div>
         {!isRenaming && (
           <div className="text-xs truncate italic" style={{ color: 'var(--text-secondary)' }}>
-            {session.agentType !== 'shell' && (!session.lastActivity || session.lastActivity.includes('cmd.exe'))
-              ? (session.status === 'processing' || session.status === 'tool_executing' ? 'Thinking...' : 'Waiting...')
-              : session.lastActivity || 'idle'}
+            {isRemoteSession && session.devBoxName ? (
+              `Dev Box: ${session.devBoxName}${session.devBoxProject ? ` (${session.devBoxProject})` : ''}`
+            ) : session.agentType !== 'shell' && (!session.lastActivity || session.lastActivity.includes('cmd.exe')) ? (
+              session.status === 'processing' || session.status === 'tool_executing' ? 'Thinking...' : 'Waiting...'
+            ) : (
+              session.lastActivity || 'idle'
+            )}
           </div>
         )}
       </div>
+
+      {/* Remote connection tooltip */}
+      {showTooltip && isRemoteSession && (
+        <div
+          className="absolute z-50 py-2 px-3 rounded shadow-lg border border-[var(--bg-hover)] min-w-[200px]"
+          style={{
+            background: 'var(--bg-secondary)',
+            top: 'calc(100% + 4px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            pointerEvents: 'none'
+          }}
+        >
+          <div className="text-xs space-y-1">
+            <div style={{ color: 'var(--text-primary)' }}>
+              <strong>Remote Connection</strong>
+            </div>
+            {session.devBoxName && (
+              <div style={{ color: 'var(--text-secondary)' }}>
+                Dev Box: {session.devBoxName}
+              </div>
+            )}
+            {session.devBoxProject && (
+              <div style={{ color: 'var(--text-secondary)' }}>
+                Project: {session.devBoxProject}
+              </div>
+            )}
+            {session.remoteState && (
+              <div style={{ color: remoteIndicator?.color }}>
+                Status: {remoteIndicator?.label}
+              </div>
+            )}
+            {session.remoteConnectionId && (
+              <div style={{ color: 'var(--text-muted)' }}>
+                Connection: {session.remoteConnectionId.substring(0, 8)}...
+              </div>
+            )}
+            {session.lastSyncTime && (
+              <div style={{ color: 'var(--text-muted)' }}>
+                Last sync: {new Date(session.lastSyncTime).toLocaleTimeString()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Close button */}
       {!session.isExternal && !isRenaming && (

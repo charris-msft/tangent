@@ -8,6 +8,9 @@ export default defineConfig({
     }
   },
   test: {
-    include: ['src/**/__tests__/**/*.test.ts']
+    include: ['src/**/__tests__/**/*.test.ts'],
+    deps: {
+      inline: ['node-rsync']  // Force inline node-rsync so it can be mocked
+    }
   }
 })

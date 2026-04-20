@@ -5,7 +5,7 @@
 ::   cmd.exe /c "D:\git\tangent\release\tangent.bat"
 :: then right-click the shortcut → Pin to taskbar.
 
-cd /d D:\git\tangent\release
+cd /d D:\git\tangent\release-2
 
 if not exist "out\main\index.js" (
     echo No build found. Running "npm run build" first...

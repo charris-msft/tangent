@@ -13,6 +13,17 @@ import { AgentLauncher } from './agents/AgentLauncher'
 import { ConfigStore } from './config/ConfigStore'
 import { registerIpcHandlers } from './ipc/handlers'
 import { PipeServer } from './config/PipeServer'
+import { DevBoxManager } from './devbox/DevBoxManager'
+import { SshTunnelManager } from './devbox/SshTunnelManager'
+import { DevTunnelManager } from './devbox/DevTunnelManager'
+import { OpenSshProvisioner } from './devbox/OpenSshProvisioner'
+import { AcpProvisioner } from './devbox/AcpProvisioner'
+import { DevBoxConnector } from './devbox/DevBoxConnector'
+import { DevBoxProvisioner } from './devbox/DevBoxProvisioner'
+import { AcpClient } from './devbox/AcpClient'
+import { RsyncManager } from './devbox/RsyncManager'
+import { SyncListener } from './devbox/SyncListener'
+import { RemoteSessionManager } from './session/RemoteSessionManager'
 
 const SESSIONS_PATH = join(homedir(), '.tangent', 'sessions.json')
 
@@ -27,12 +38,27 @@ sessionManager.setContextStore(contextStore)
 const sdkSessionManager = new SdkSessionManager(sessionStore, ptyManager)
 sessionManager.setSdkManager(sdkSessionManager)
 const agentStore = new AgentStore()
-const agentLauncher = new AgentLauncher(ptyManager, sessionStore, sessionManager)
 const pipeServer = new PipeServer(
   configStore,
   agentStore,
   () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
 )
+
+// Remote execution managers
+const devBoxManager = new DevBoxManager()
+const sshTunnelManager = new SshTunnelManager()
+const devTunnelManager = new DevTunnelManager()
+const openSshProvisioner = new OpenSshProvisioner()
+const acpProvisioner = new AcpProvisioner()
+const devBoxConnector = new DevBoxConnector(devBoxManager, sshTunnelManager, openSshProvisioner, devTunnelManager)
+const devBoxProvisioner = new DevBoxProvisioner(openSshProvisioner, acpProvisioner)
+const acpClient = new AcpClient()
+const rsyncManager = new RsyncManager()
+const syncListener = new SyncListener(rsyncManager)
+const remoteSessionManager = new RemoteSessionManager(
+  devBoxConnector, devBoxProvisioner, acpClient, rsyncManager, sessionStore, ptyManager, agentStore
+)
+const agentLauncher = new AgentLauncher(ptyManager, sessionStore, sessionManager, remoteSessionManager)
 
 /** Persist restorable sessions to disk immediately. Called on every session change. */
 function persistSessions(): void {
@@ -55,7 +81,11 @@ function persistSessions(): void {
           agentType: s.agentType,
           agentCommand: s.agentCommand,
           agentArgs: s.agentArgs,
-          agentEnv: s.agentEnv
+          agentEnv: s.agentEnv,
+          // P4.17: Persist remote session fields
+          devBoxName: s.devBoxName,
+          devBoxProject: s.devBoxProject,
+          acpSessionId: s.acpSessionId
         }))
       }
       writeFileSync(SESSIONS_PATH, JSON.stringify(data, null, 2), 'utf-8')
@@ -66,7 +96,7 @@ function persistSessions(): void {
       }
     }
   } catch (err) {
-    console.warn('[Tangent] Failed to persist sessions:', err)
+    console.warn('[Tangent 2] Failed to persist sessions:', err)
   }
 }
 
@@ -104,11 +134,11 @@ sessionStore.on('agent-promoted', ({ id, agentType, ptyId }: { id: string; agent
 })
 
 function createWindow(): void {
-  // Set app identity so Windows taskbar uses the Tangent icon, not the Electron icon
-  app.setAppUserModelId('com.tangent.app')
+  // Set app identity so Windows taskbar uses the Tangent 2 icon, not the Electron icon
+  app.setAppUserModelId('com.tangent2.app')
 
   mainWindow = new BrowserWindow({
-    title: 'Tangent',
+    title: 'Tangent 2',
     width: 1200,
     height: 800,
     minWidth: 600,
@@ -129,11 +159,11 @@ function createWindow(): void {
     const tangentExe = join(__dirname, '../../tangent.exe')
     if (existsSync(tangentExe)) {
       mainWindow.setAppDetails({
-        appId: 'com.tangent.app',
+        appId: 'com.tangent2.app',
         appIconPath: join(__dirname, '../../assets/tangent.ico'),
         appIconIndex: 0,
         relaunchCommand: `"${tangentExe}"`,
-        relaunchDisplayName: 'Tangent'
+        relaunchDisplayName: 'Tangent 2'
       })
     }
   }
@@ -146,6 +176,9 @@ function createWindow(): void {
     agentStore,
     agentLauncher,
     configStore,
+    devBoxManager,
+    acpClient,
+    remoteSessionManager,
     getWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   })
 
@@ -173,6 +206,67 @@ app.whenReady().then(async () => {
   pipeServer.start()
   createWindow()
 
+  // Forward remote execution events to renderer
+  const getWin = (): BrowserWindow | null =>
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+
+  remoteSessionManager.on('remote:state-changed', (sessionId: string, state: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('remote:state-changed', sessionId, state)
+  })
+  remoteSessionManager.on('remote:message', (sessionId: string, text: string) => {
+    const win = getWin()
+    if (win) {
+      win.webContents.send('remote:message', sessionId, text)
+      // Also push as terminal data so xterm.js renders the agent output
+      win.webContents.send(`terminal:data:${sessionId}`, text + '\r\n')
+    }
+  })
+  // PTY mode: forward raw terminal bytes directly to xterm.js
+  remoteSessionManager.on('remote:data', (sessionId: string, data: Buffer) => {
+    const win = getWin()
+    if (win) {
+      win.webContents.send(`terminal:data:${sessionId}`, data)
+    }
+  })
+  remoteSessionManager.on('remote:error', (sessionId: string, error: string) => {
+    const win = getWin()
+    if (win) {
+      win.webContents.send('remote:error', sessionId, error)
+      win.webContents.send(`terminal:data:${sessionId}`, `\r\n\x1b[31m❌ ${error}\x1b[0m\r\n`)
+    }
+  })
+
+  devBoxConnector.on('connection:ready', (connectionId: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('devbox:connection-ready', connectionId)
+  })
+  devBoxConnector.on('connection:failed', (connectionId: string, error: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('devbox:connection-failed', connectionId, error)
+  })
+  devBoxConnector.on('connection:disconnected', (connectionId: string) => {
+    const win = getWin()
+    if (win) win.webContents.send('devbox:connection-disconnected', connectionId)
+  })
+
+  syncListener.on('sync:incoming', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:incoming', data)
+  })
+  syncListener.on('sync:complete', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:complete', data)
+  })
+  syncListener.on('sync:error', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:error', data)
+  })
+  syncListener.on('sync:conflict', (data: unknown) => {
+    const win = getWin()
+    if (win) win.webContents.send('sync:conflict', data)
+  })
+
   // Restore saved sessions or create a fresh one
   let restored = false
   try {
@@ -181,8 +275,15 @@ app.whenReady().then(async () => {
       const saved = JSON.parse(raw)
       if (saved.sessions?.length > 0) {
         const agentSessions: Array<{ sessionId: string; ptyId: string; saved: typeof saved.sessions[0] }> = []
+        const remoteSessions: Array<typeof saved.sessions[0]> = []
 
         for (const s of saved.sessions) {
+          // P4.17: Detect remote sessions and handle separately
+          if (s.kind === 'remote-agent') {
+            remoteSessions.push(s)
+            continue
+          }
+
           const session = sessionManager.create(s.folderPath)
           if (s.isRenamed && s.name) {
             sessionStore.rename(session.id, s.name)
@@ -190,6 +291,47 @@ app.whenReady().then(async () => {
           if (s.agentCommand) {
             agentSessions.push({ sessionId: session.id, ptyId: session.ptyId, saved: s })
           }
+        }
+
+        // P4.17: Restore remote sessions
+        // Remote sessions need special handling:
+        // - Check if Dev Box is still running
+        // - If running → attempt reconnect
+        // - If stopped → show reconnect prompt (needs_input status)
+        for (const s of remoteSessions) {
+          if (!s.devBoxName || !s.devBoxProject) {
+            console.warn(
+              `[Tangent 2] Skipping remote session restore: missing Dev Box info`,
+              s.name
+            )
+            continue
+          }
+
+          // For now, create a placeholder session with needs_input status
+          // Full reconnection will be implemented once RemoteSessionManager is integrated
+          const sessionId = `remote-restore-${Date.now()}-${Math.random().toString(36).substring(7)}`
+          sessionStore.add({
+            id: sessionId,
+            kind: 'remote-agent',
+            agentType: s.agentType || 'copilot-cli',
+            name: s.name,
+            folderName: s.folderName,
+            folderPath: s.folderPath,
+            isRenamed: s.isRenamed || false,
+            status: 'needs_input',
+            lastActivity: 'Remote session - reconnect required',
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+            ptyId: '',
+            isExternal: false,
+            remoteState: 'starting-devbox',
+            devBoxName: s.devBoxName,
+            devBoxProject: s.devBoxProject
+          })
+
+          console.log(
+            `[Tangent 2] Remote session restored (needs reconnection): ${s.devBoxName}`
+          )
         }
         // Select the previously active session by index
         if (typeof saved.activeIndex === 'number') {
@@ -264,7 +406,7 @@ app.whenReady().then(async () => {
             if (resolved) return
             resolved = true
             ptyManager.removeListener('data', onData)
-            console.warn(`[Tangent] Shell ready timeout for session ${sessionId}, replaying anyway`)
+            console.warn(`[Tangent 2] Shell ready timeout for session ${sessionId}, replaying anyway`)
             replayCommand()
           }, SHELL_READY_TIMEOUT_MS)
           ptyManager.on('data', onData)
@@ -274,7 +416,7 @@ app.whenReady().then(async () => {
       }
     }
   } catch (err) {
-    console.warn('[Tangent] Failed to restore sessions:', err)
+    console.warn('[Tangent 2] Failed to restore sessions:', err)
   }
 
   if (!restored) {
@@ -284,6 +426,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   persistNow()
+  syncListener.dispose()
 })
 
 app.on('window-all-closed', () => {

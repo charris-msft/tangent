@@ -12,9 +12,11 @@ export const terminalRegistry = new Map<string, Terminal>()
 export const searchRegistry = new Map<string, SearchAddon>()
 
 interface TerminalViewportProps {
-  sessions: { id: string; kind: SessionKind }[]
+  sessions: { id: string; kind: SessionKind; name?: string; folderName?: string; folderPath?: string }[]
   activeId: string | null
   fontSize: number
+  poppedOutSessionIds?: Set<string>
+  onPullBack?: (sessionId: string) => void
 }
 
 interface TerminalInstance {
@@ -25,12 +27,18 @@ interface TerminalInstance {
   cleanup: () => void
 }
 
-export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewportProps) {
+export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessionIds, onPullBack }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const instancesRef = useRef<Map<string, TerminalInstance>>(new Map())
+  const poppedOutRef = useRef<Set<string>>(new Set())
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Keep ref in sync with prop so resize callbacks can check current state
+  useEffect(() => {
+    poppedOutRef.current = poppedOutSessionIds || new Set()
+  }, [poppedOutSessionIds])
 
   // Toggle search bar
   const toggleSearch = () => {
@@ -313,11 +321,25 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
           })
           cleanupFns.push(() => onDataDisposable.dispose())
 
-          // Report resize
+          // Report resize - but only if this terminal is not popped out.
+          // When a session is popped out, the popout window controls the PTY size
+          // and the main window's terminal just scrolls to fit whatever comes in.
           const onResizeDisposable = terminal.onResize(({ cols, rows }) => {
-            window.tangentAPI.terminal.resize(session.id, cols, rows)
+            if (!poppedOutRef.current.has(session.id)) {
+              window.tangentAPI.terminal.resize(session.id, cols, rows)
+            }
           })
           cleanupFns.push(() => onResizeDisposable.dispose())
+
+          // Send initial terminal size after fitAddon has a chance to calculate
+          // the real dimensions from the DOM container. We use a short delay
+          // because fit() runs in requestAnimationFrame when the terminal becomes visible.
+          const initialResizeTimer = setTimeout(() => {
+            if (!poppedOutRef.current.has(session.id)) {
+              window.tangentAPI.terminal.resize(session.id, terminal.cols, terminal.rows)
+            }
+          }, 200)
+          cleanupFns.push(() => clearTimeout(initialResizeTimer))
         }
 
         instances.set(session.id, {
@@ -333,7 +355,10 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
     }
   }, [sessions, fontSize])
 
-  // Show/hide terminals based on active session
+  // Show/hide terminals based on active session.
+  // Terminals are kept mounted even when popped out so both the main window
+  // and the popout window can mirror the same PTY output. Both xterm instances
+  // subscribe to the same IPC events and render the same content.
   useEffect(() => {
     const instances = instancesRef.current
     for (const [id, inst] of instances) {
@@ -342,13 +367,16 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
         // Small delay to let DOM render before fitting
         requestAnimationFrame(() => {
           inst.fitAddon.fit()
-          inst.terminal.focus()
+          // Only focus if not popped out (popout window handles its own focus)
+          if (!poppedOutSessionIds?.has(activeId)) {
+            inst.terminal.focus()
+          }
         })
       } else {
         inst.div.style.display = 'none'
       }
     }
-  }, [activeId])
+  }, [activeId, poppedOutSessionIds])
 
   // Handle container resize
   useEffect(() => {
@@ -434,7 +462,7 @@ export function TerminalViewport({ sessions, activeId, fontSize }: TerminalViewp
           >✕</button>
         </div>
       )}
-      <div ref={containerRef} className="flex-1 min-w-0" />
+      <div ref={containerRef} className="flex-1 min-w-0 relative" />
     </div>
   )
 }
