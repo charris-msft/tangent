@@ -18,7 +18,7 @@ export interface KeyboardConfig {
 }
 
 /**
- * Global keyboard shortcut handler for Tangent 2.
+ * Global keyboard shortcut handler for Tangent.
  *
  * Shortcuts:
  *   Ctrl+B          Toggle sessions panel visibility
@@ -197,6 +197,7 @@ export function useKeyboard(config: KeyboardConfig): void {
       if (!target.closest('.xterm')) return
 
       e.preventDefault()
+      e.stopPropagation()
 
       const terminal = activeId ? terminalRegistry.get(activeId) : null
       const selection = terminal?.getSelection() || ''
@@ -224,11 +225,11 @@ export function useKeyboard(config: KeyboardConfig): void {
   useEffect(() => {
     // Use capture phase so shortcuts fire before xterm's bubbling handlers
     window.addEventListener('keydown', handleKeyDown, { capture: true })
-    window.addEventListener('contextmenu', handleContextMenu)
+    window.addEventListener('contextmenu', handleContextMenu, { capture: true })
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, { capture: true })
-      window.removeEventListener('contextmenu', handleContextMenu)
+      window.removeEventListener('contextmenu', handleContextMenu, { capture: true })
     }
   }, [handleKeyDown, handleContextMenu])
 }

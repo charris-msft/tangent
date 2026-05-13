@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { ProjectFolder } from '@shared/types'
+import type { ProjectFolder, AgentLaunchResult } from '@shared/types'
 
 export function useAgents() {
   const [groups, setGroups] = useState<ProjectFolder[]>([])
@@ -23,7 +23,8 @@ export function useAgents() {
   }, [])
 
   const launchAgent = useCallback(async (agentId: string, sessionId: string) => {
-    await window.tangentAPI.agents.launch(agentId, sessionId)
+    const result = await window.tangentAPI.agents.launch(agentId, sessionId)
+    return result as AgentLaunchResult
   }, [])
 
   return { groups, saveGroups, launchAgent }

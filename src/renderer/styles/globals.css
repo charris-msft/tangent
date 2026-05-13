@@ -71,5 +71,17 @@ body {
 
 /* === xterm.js overrides === */
 .xterm {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   padding: 4px;
+}
+
+.xterm .xterm-viewport {
+  overflow-x: hidden !important;
+}
+
+/* Keep xterm scrollbar always visible */
+.xterm .xterm-scrollable-element > .scrollbar {
+  opacity: 1 !important;
 }

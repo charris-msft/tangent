@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useHumanContext } from '@/hooks/useHumanContext'
+import { useSessions } from '@/hooks/useSession'
 import { searchRegistry, terminalRegistry } from '@/components/Terminal/TerminalViewport'
 import type { HumanContext, PromptEntry } from '@shared/types'
 
@@ -128,8 +129,24 @@ function SnapshotBar({ context }: { context: HumanContext }) {
   )
 }
 
-function ResumeBadge({ context }: { context: HumanContext }) {
+function ResumeBadge({ context, sessionId }: { context: HumanContext; sessionId: string | null }) {
   const { resumeSuggestion } = context
+  const { sessions } = useSessions()
+  const session = sessionId ? sessions.find(s => s.id === sessionId) : null
+  const isFailedRemote =
+    session?.kind === 'remote-agent' && session?.status === 'failed'
+
+  const handleReconnect = async () => {
+    if (!sessionId) return
+    try {
+      const result = await (window as any).tangentAPI.session.reconnect(sessionId)
+      if (result && !result.success) {
+        console.warn('Reconnect failed:', result.error)
+      }
+    } catch (err) {
+      console.warn('Reconnect error:', err)
+    }
+  }
 
   return (
     <div
@@ -140,7 +157,20 @@ function ResumeBadge({ context }: { context: HumanContext }) {
       }}
     >
       <span>{resumeSuggestion.icon}</span>
-      <span>{resumeSuggestion.text}</span>
+      <span>{isFailedRemote ? 'Session failed — reconnect to Dev Box' : resumeSuggestion.text}</span>
+      {isFailedRemote && (
+        <button
+          onClick={handleReconnect}
+          className="ml-2 px-2 py-0.5 rounded text-xs"
+          style={{
+            background: 'var(--accent)',
+            color: 'var(--bg-primary)',
+          }}
+          title="Reconnect to Dev Box"
+        >
+          ↻ Reconnect
+        </button>
+      )}
     </div>
   )
 }
@@ -222,7 +252,7 @@ export function HumanContextPanel({ sessionId }: HumanContextPanelProps) {
 
         {/* Resume suggestion + collapse toggle */}
         <div className="flex items-center justify-between">
-          {context && <ResumeBadge context={context} />}
+          {context && <ResumeBadge context={context} sessionId={sessionId} />}
           <button
             className="text-xs px-2 py-0.5 rounded cursor-pointer"
             style={{

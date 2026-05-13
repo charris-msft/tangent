@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { SdkLineBuffer } from '@shared/SdkLineBuffer'
 import type { SessionKind } from '@shared/types'
@@ -25,6 +26,11 @@ interface TerminalInstance {
   searchAddon: SearchAddon
   div: HTMLDivElement
   cleanup: () => void
+}
+
+function fitTerminalToContainer(inst: TerminalInstance, container: HTMLDivElement | null) {
+  if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return
+  inst.fitAddon.fit()
 }
 
 export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessionIds, onPullBack }: TerminalViewportProps) {
@@ -112,6 +118,17 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
         terminal.loadAddon(fitAddon)
         const searchAddon = new SearchAddon()
         terminal.loadAddon(searchAddon)
+        // Make http(s) URLs in terminal output clickable; open in default browser
+        const webLinksAddon = new WebLinksAddon((event, uri) => {
+          event.preventDefault()
+          const api = (window as any).tangentAPI
+          if (api?.shell?.openExternal) {
+            api.shell.openExternal(uri)
+          } else {
+            window.open(uri, '_blank', 'noopener,noreferrer')
+          }
+        })
+        terminal.loadAddon(webLinksAddon)
 
         const div = document.createElement('div')
         div.style.height = '100%'
@@ -126,6 +143,9 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
         // Returning false tells xterm to NOT handle the key event,
         // allowing the window-level useKeyboard handler to process it.
         let sdkLineBuffer: SdkLineBuffer | null = null
+        // Flag to suppress the xterm onData '\r'/'\n' that fires after
+        // Shift+Enter or Ctrl+Enter is already handled by attachCustomKeyEventHandler.
+        let suppressNextEnter = false
 
         // Prompt history navigation for PTY agent sessions (up/down arrow)
         let ptyHistory: string[] = []
@@ -178,6 +198,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
           }
           // Shift+Enter: new line (multiline input for agents)
           if (e.shiftKey && e.key === 'Enter' && !e.ctrlKey && !e.altKey && e.type === 'keydown') {
+            suppressNextEnter = true
             if (session.kind === 'copilot-sdk' && sdkLineBuffer) {
               sdkLineBuffer.insertNewline()
             } else {
@@ -192,6 +213,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
           }
           // Ctrl+Enter: new line in Copilot CLI input (send \n instead of \r)
           if (e.ctrlKey && e.key === 'Enter' && !e.shiftKey && !e.altKey && e.type === 'keydown') {
+            suppressNextEnter = true
             window.tangentAPI.terminal.write(session.id, '\n')
             return false
           }
@@ -256,6 +278,11 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
 
           // User keystrokes → line buffer (local echo + send on Enter)
           const onDataDisposable = terminal.onData((data) => {
+            if (suppressNextEnter && (data === '\r' || data === '\n')) {
+              suppressNextEnter = false
+              return
+            }
+            suppressNextEnter = false
             sdkLineBuffer!.handleInput(data)
           })
           cleanupFns.push(() => onDataDisposable.dispose())
@@ -271,6 +298,11 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
           let inputBuffer = ''
           let inEscSeq: false | 'esc' | 'csi' = false
           const onDataDisposable = terminal.onData((data) => {
+            if (suppressNextEnter && (data === '\r' || data === '\n')) {
+              suppressNextEnter = false
+              return
+            }
+            suppressNextEnter = false
             window.tangentAPI.terminal.write(session.id, data)
 
             // Build a line buffer to capture prompts for the context panel.
@@ -366,7 +398,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
         inst.div.style.display = 'block'
         // Small delay to let DOM render before fitting
         requestAnimationFrame(() => {
-          inst.fitAddon.fit()
+          fitTerminalToContainer(inst, containerRef.current)
           // Only focus if not popped out (popout window handles its own focus)
           if (!poppedOutSessionIds?.has(activeId)) {
             inst.terminal.focus()
@@ -386,7 +418,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
     const observer = new ResizeObserver(() => {
       const inst = activeId ? instancesRef.current.get(activeId) : null
       if (inst) {
-        inst.fitAddon.fit()
+        requestAnimationFrame(() => fitTerminalToContainer(inst, container))
       }
     })
     observer.observe(container)
@@ -397,7 +429,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
   useEffect(() => {
     for (const [, inst] of instancesRef.current) {
       inst.terminal.options.fontSize = fontSize
-      inst.fitAddon.fit()
+      fitTerminalToContainer(inst, containerRef.current)
     }
   }, [fontSize])
 
@@ -419,7 +451,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
   }, [searchOpen])
 
   return (
-    <div className="flex-1 min-w-0 h-full flex flex-col" style={{ background: 'var(--bg-primary)' }}>
+    <div className="flex-1 min-w-0 h-full flex flex-col overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
       {searchOpen && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
           <input
@@ -462,7 +494,7 @@ export function TerminalViewport({ sessions, activeId, fontSize, poppedOutSessio
           >✕</button>
         </div>
       )}
-      <div ref={containerRef} className="flex-1 min-w-0 relative" />
+      <div ref={containerRef} className="flex-1 min-w-0 relative overflow-hidden" />
     </div>
   )
 }

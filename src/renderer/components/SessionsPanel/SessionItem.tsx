@@ -1,17 +1,21 @@
 import { useState, useRef, useEffect } from 'react'
-import { mapStatusToUI } from '@shared/statusMapping'
 import type { Session, RemoteSessionState } from '@shared/types'
+import { confirmDialog } from '../ConfirmDialog'
+import { getSessionRowStatusText, getSessionRowUI } from './sessionRowState'
 
 interface SessionItemProps {
   session: Session
   isActive: boolean
   isHighlighted: boolean
   isRenaming: boolean
+  isPoppedOut?: boolean
   onSelect: () => void
   onClose: () => void
   onRename: (name: string) => void
   onRenameCancel: () => void
   onCreateAgent?: () => void
+  onPopOut?: () => void
+  onPullBack?: () => void
 }
 
 const getRemoteStateIndicator = (state: RemoteSessionState): { emoji: string; color: string; label: string; animated: boolean } => {
@@ -38,13 +42,16 @@ export function SessionItem({
   isActive,
   isHighlighted,
   isRenaming,
+  isPoppedOut = false,
   onSelect,
   onClose,
   onRename,
   onRenameCancel,
-  onCreateAgent
+  onCreateAgent,
+  onPopOut,
+  onPullBack
 }: SessionItemProps) {
-  const ui = mapStatusToUI(session.status)
+  const ui = getSessionRowUI(session)
   const [renameValue, setRenameValue] = useState(session.name)
   const renameInputRef = useRef<HTMLInputElement>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
@@ -107,6 +114,11 @@ export function SessionItem({
 
   return (
     <div
+      data-testid="session-row"
+      data-session-id={session.id}
+      data-status={session.status}
+      data-agent-type={session.agentType}
+      aria-current={isActive ? 'true' : undefined}
       onClick={onSelect}
       onContextMenu={handleContextMenu}
       className={`relative flex items-center gap-2 px-3 py-2 mb-1 rounded cursor-pointer group ${barAnimClass} ${isHighlighted ? 'ring-1 ring-[var(--accent)]' : ''}`}
@@ -205,8 +217,8 @@ export function SessionItem({
           <div className="text-xs truncate italic" style={{ color: 'var(--text-secondary)' }}>
             {isRemoteSession && session.devBoxName ? (
               `Dev Box: ${session.devBoxName}${session.devBoxProject ? ` (${session.devBoxProject})` : ''}`
-            ) : session.agentType !== 'shell' && (!session.lastActivity || session.lastActivity.includes('cmd.exe')) ? (
-              session.status === 'processing' || session.status === 'tool_executing' ? 'Thinking...' : 'Waiting...'
+            ) : session.agentType !== 'shell' ? (
+              getSessionRowStatusText(session)
             ) : (
               session.lastActivity || 'idle'
             )}
@@ -259,12 +271,58 @@ export function SessionItem({
         </div>
       )}
 
+      {/* Reconnect button for failed remote sessions */}
+      {session.kind === 'remote-agent' && session.status === 'failed' && !isRenaming && (
+        <button
+          onClick={async (e) => {
+            e.stopPropagation()
+            try {
+              const result = await (window as any).tangentAPI.session.reconnect(session.id)
+              if (result && !result.success) {
+                console.warn('Reconnect failed:', result.error)
+              }
+            } catch (err) {
+              console.warn('Reconnect error:', err)
+            }
+          }}
+          className="text-xs px-1 rounded hover:bg-[var(--bg-hover)] shrink-0"
+          style={{ color: 'var(--accent)' }}
+          title="Reconnect to Dev Box"
+          aria-label="Reconnect"
+        >
+          ↻
+        </button>
+      )}
+
+      {/* Popout / pull-back button */}
+      {!session.isExternal && !isRenaming && (onPopOut || onPullBack) && (
+        <button
+          onClick={async (e) => {
+            e.stopPropagation()
+            if (isPoppedOut && onPullBack) onPullBack()
+            else if (!isPoppedOut && onPopOut) onPopOut()
+          }}
+          className="opacity-0 group-hover:opacity-100 text-xs px-1 rounded hover:bg-[var(--bg-hover)] shrink-0"
+          style={{ color: 'var(--text-muted)' }}
+          title={isPoppedOut ? 'Pull session back into main window' : 'Pop session out to its own window'}
+          aria-label={isPoppedOut ? 'Pull back' : 'Pop out'}
+        >
+          {isPoppedOut ? '⬒' : '⬈'}
+        </button>
+      )}
+
       {/* Close button */}
       {!session.isExternal && !isRenaming && (
         <button
-          onClick={(e) => { e.stopPropagation(); if (window.confirm(`Close session "${session.name}"?`)) onClose() }}
+          onClick={async (e) => {
+            e.stopPropagation()
+            const ok = await confirmDialog(`Close session "${session.name}"?`, { confirmLabel: 'Close' })
+            if (ok) onClose()
+          }}
           className="opacity-0 group-hover:opacity-100 text-xs px-1 rounded hover:bg-[var(--bg-hover)] shrink-0"
           style={{ color: 'var(--text-muted)' }}
+          title="Close session"
+          aria-label="Close session"
         >
           ×
         </button>
@@ -290,8 +348,30 @@ export function SessionItem({
               Save as Agent...
             </button>
           )}
+          {onPopOut && !isPoppedOut && (
+            <button
+              onClick={() => { setContextMenu(null); onPopOut() }}
+              className="w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-hover)] transition-colors"
+              style={{ color: 'var(--text-primary)' }}
+            >
+              Pop Out to Window
+            </button>
+          )}
+          {onPullBack && isPoppedOut && (
+            <button
+              onClick={() => { setContextMenu(null); onPullBack() }}
+              className="w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-hover)] transition-colors"
+              style={{ color: 'var(--text-primary)' }}
+            >
+              Pull Back to Main Window
+            </button>
+          )}
           <button
-            onClick={() => { setContextMenu(null); if (window.confirm(`Close session "${session.name}"?`)) onClose() }}
+            onClick={async () => {
+              setContextMenu(null)
+              const ok = await confirmDialog(`Close session "${session.name}"?`, { confirmLabel: 'Close' })
+              if (ok) onClose()
+            }}
             className="w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-hover)] transition-colors"
             style={{ color: 'var(--text-primary)' }}
           >

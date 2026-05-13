@@ -13,6 +13,9 @@ import { PermissionDialog } from '@/components/PermissionDialog'
 import { UserInputDialog } from '@/components/UserInputDialog'
 import { HumanContextPanel } from '@/components/HumanContextPanel/HumanContextPanel'
 import { DisplayPicker } from '@/components/DisplayPicker'
+import { DevTunnelSignInBanner } from '@/components/DevTunnelSignInBanner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { PromptHistoryModal } from '@/components/PromptHistory/PromptHistoryModal'
 import { useExplode } from '@/hooks/useExplode'
 import { ZOOM } from '@shared/constants'
 import type { AgentProfile, Session } from '@shared/types'
@@ -45,6 +48,8 @@ export function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [contextPanelVisible, setContextPanelVisible] = useState(true)
   const [explodeOpen, setExplodeOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [compactMode, setCompactMode] = useState(false)
   const explodeAll = useExplode(sessions)
 
   const eligibleExplodeCount = sessions.filter(
@@ -79,18 +84,43 @@ export function App(): JSX.Element {
     setContextPanelVisible(prev => !prev)
   }, [])
 
+  const toggleCompactMode = useCallback(async () => {
+    const newMode = !compactMode
+    if (newMode) {
+      // Entering compact mode: calculate compact width and delegate to main process
+      const compactWidth = sessionsPanelWidth + 44 + 20
+      const success = await window.tangentAPI.window.setCompactMode(compactWidth)
+      if (success) {
+        setCompactMode(true)
+      }
+    } else {
+      // Exiting compact mode: restore via main process
+      const success = await window.tangentAPI.window.restoreFromCompact()
+      if (success) {
+        setCompactMode(false)
+      }
+    }
+  }, [compactMode, sessionsPanelWidth])
+
   const toggleSidebar = useCallback(() => {
     // No-op — sidebar is now always-visible tabs
   }, [])
 
   const launchAgentByIndex = useCallback(
-    (index: number) => {
+    async (index: number) => {
       if (!activeId || groups.length === 0) return
       const activeGroup = groups[0]
       if (!activeGroup || index < 0 || index >= activeGroup.agents.length) return
-      launchAgent(activeGroup.agents[index].id, activeId)
+      const result = await launchAgent(activeGroup.agents[index].id, activeId)
+      if (result.launched && result.sessionId) {
+        if (compactMode) {
+          await window.tangentAPI.window.restoreFromCompact()
+          setCompactMode(false)
+        }
+        selectSession(result.sessionId)
+      }
     },
-    [activeId, groups, launchAgent]
+    [activeId, groups, launchAgent, compactMode, selectSession]
   )
 
   useGlobalShortcuts({
@@ -109,6 +139,25 @@ export function App(): JSX.Element {
     }, [])
   })
 
+  // Auto-expand from compact mode when session is selected
+  const handleSelectSession = useCallback(async (id: string) => {
+    if (compactMode) {
+      await window.tangentAPI.window.restoreFromCompact()
+      setCompactMode(false)
+    }
+    selectSession(id)
+  }, [selectSession, compactMode])
+
+  // Auto-expand from compact mode when agent is launched
+  const handleAgentLaunched = useCallback(async (sessionId: string) => {
+    if (compactMode) {
+      await window.tangentAPI.window.restoreFromCompact()
+      setCompactMode(false)
+    }
+    // Agent already launched by AgentsSidebar, just expand and select
+    selectSession(sessionId)
+  }, [selectSession, compactMode])
+
   useKeyboard({
     createSession,
     closeSession,
@@ -124,13 +173,13 @@ export function App(): JSX.Element {
   })
 
   return (
-    <div className="flex flex-col h-screen w-screen relative">
-      <div className="flex flex-1 min-h-0">
+    <div className="flex flex-col h-screen w-screen relative overflow-hidden">
+      <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
         {sessionsPanelVisible && (
           <SessionsPanel
             sessions={sessions}
             activeId={activeId}
-            onSelect={selectSession}
+            onSelect={handleSelectSession}
             onClose={closeSession}
             onCreate={createSession}
             onRename={renameSession}
@@ -143,19 +192,35 @@ export function App(): JSX.Element {
             poppedOutSessionIds={poppedOutSessionIds}
           />
         )}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
-          {contextPanelVisible && (
+        <div
+          data-testid="terminal-column"
+          className="flex flex-col min-w-0 min-h-0"
+          style={{
+            flex: compactMode ? '0 0 0px' : '1 1 0%',
+            width: compactMode ? '0' : 'auto',
+            opacity: compactMode ? '0' : '1',
+            overflow: 'hidden',
+            transition: 'flex 0.2s ease-in-out, width 0.2s ease-in-out, opacity 0.15s ease-in-out'
+          }}>
+          {!compactMode && contextPanelVisible && (
             <HumanContextPanel sessionId={activeId} />
           )}
-          <TerminalViewport
-            sessions={sessions}
-            activeId={activeId}
-            fontSize={fontSize}
-            poppedOutSessionIds={poppedOutSessionIds}
-            onPullBack={pullBackSession}
-          />
+          {!compactMode && (
+            <TerminalViewport
+              sessions={sessions}
+              activeId={activeId}
+              fontSize={fontSize}
+              poppedOutSessionIds={poppedOutSessionIds}
+              onPullBack={pullBackSession}
+            />
+          )}
         </div>
-        <AgentsSidebar activeSessionId={activeId} prefillAgent={prefillAgent} onPrefillConsumed={() => setPrefillAgent(null)} />
+        <AgentsSidebar
+          activeSessionId={activeId}
+          prefillAgent={prefillAgent}
+          onPrefillConsumed={() => setPrefillAgent(null)}
+          onAgentLaunched={handleAgentLaunched}
+        />
       </div>
       <StatusBar
         sessions={sessions}
@@ -163,8 +228,19 @@ export function App(): JSX.Element {
         onToggleSettings={toggleSettings}
         onExplode={() => setExplodeOpen(true)}
         explodeDisabled={eligibleExplodeCount === 0}
+        onCollapseAll={() => { void (window as any).tangentAPI?.window?.collapseAll?.() }}
+        collapseDisabled={poppedOutSessionIds.size === 0}
+        onOpenHistory={() => setHistoryOpen(true)}
+        historyDisabled={!activeSession}
+        compactMode={compactMode}
+        onToggleCompactMode={toggleCompactMode}
       />
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} fontSize={fontSize} setFontSize={setFontSize} />}
+      <PromptHistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        activeSession={activeSession}
+      />
       <DisplayPicker
         isOpen={explodeOpen}
         onClose={() => setExplodeOpen(false)}
@@ -177,6 +253,8 @@ export function App(): JSX.Element {
           <UserInputDialog sessionId={activeId} />
         </>
       )}
+      <DevTunnelSignInBanner />
+      <ConfirmDialog />
     </div>
   )
 }

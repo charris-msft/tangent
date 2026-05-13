@@ -14,6 +14,9 @@ interface SessionsPanelProps {
   width: number
   onWidthChange: (w: number) => void
   onCollapse: () => void
+  onPopOut?: (id: string) => void
+  onPullBack?: (id: string) => void
+  poppedOutSessionIds?: Set<string>
 }
 
 const MIN_WIDTH = 140
@@ -21,7 +24,7 @@ const MAX_WIDTH = 500
 
 const RECENT_THRESHOLD_MS = 48 * 60 * 60 * 1000 // 48 hours
 
-export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate, onRename, onCreateAgent, width, onWidthChange, onCollapse }: SessionsPanelProps) {
+export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate, onRename, onCreateAgent, width, onWidthChange, onCollapse, onPopOut, onPullBack, poppedOutSessionIds }: SessionsPanelProps) {
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1)
   const [filterOpen, setFilterOpen] = useState(false)
   const [filterValue, setFilterValue] = useState('')
@@ -195,11 +198,14 @@ export function SessionsPanel({ sessions, activeId, onSelect, onClose, onCreate,
             isActive={session.id === activeId}
             isHighlighted={flatIndex === highlightedIndex}
             isRenaming={session.id === renamingId}
+            isPoppedOut={poppedOutSessionIds?.has(session.id) ?? false}
             onSelect={() => onSelect(session.id)}
             onClose={() => onClose(session.id)}
             onRename={(name) => handleRename(session.id, name)}
             onRenameCancel={handleRenameCancel}
             onCreateAgent={onCreateAgent ? () => onCreateAgent(session) : undefined}
+            onPopOut={onPopOut ? () => onPopOut(session.id) : undefined}
+            onPullBack={onPullBack ? () => onPullBack(session.id) : undefined}
           />
         )
       })}

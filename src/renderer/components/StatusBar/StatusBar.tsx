@@ -23,15 +23,18 @@ interface StatusBarProps {
   sessions: Session[]
   activeSession: Session | undefined
   onToggleSettings: () => void
+  onExplode?: () => void
+  explodeDisabled?: boolean
+  onCollapseAll?: () => void
+  collapseDisabled?: boolean
   devBoxInfo?: DevBoxInfo
+  onOpenHistory?: () => void
+  historyDisabled?: boolean
+  compactMode?: boolean
+  onToggleCompactMode?: () => void
 }
 
-/** Agent type label mapping */
-const AGENT_LABELS: Record<string, string> = {
-  'copilot-cli': 'Copilot CLI',
-  'claude-code': 'Claude Code',
-  shell: 'Shell'
-}
+
 
 /**
  * Truncate a path from the left side if it exceeds maxLen.
@@ -56,7 +59,7 @@ function formatTokens(count: number): string {
   return String(count)
 }
 
-export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInfo }: StatusBarProps) {
+export function StatusBar({ sessions, activeSession, onToggleSettings, onExplode, explodeDisabled, onCollapseAll, collapseDisabled, devBoxInfo, onOpenHistory, historyDisabled, compactMode, onToggleCompactMode }: StatusBarProps) {
   const [editorPopupOpen, setEditorPopupOpen] = useState(false)
   const [editorValue, setEditorValue] = useState('')
   const popupRef = useRef<HTMLDivElement>(null)
@@ -75,10 +78,6 @@ export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInf
     }
     return { running, idle, error }
   }, [sessions])
-
-  const agentLabel = activeSession
-    ? AGENT_LABELS[activeSession.agentType] ?? activeSession.agentType
-    : 'No Session'
 
   const lastActivity = activeSession
     ? truncateRight(activeSession.lastActivity || '', 40)
@@ -165,16 +164,12 @@ export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInf
 
       <span className="mx-2" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
 
-      {/* Center section: agent type + last activity */}
+      {/* Center section: last activity */}
       <div className="flex items-center gap-2 min-w-0 flex-shrink">
-        <span style={{ color: 'var(--text-primary)' }}>{agentLabel}</span>
         {lastActivity && (
-          <>
-            <span style={{ color: 'var(--text-muted)' }}>{'\u2014'}</span>
-            <span className="truncate" style={{ color: 'var(--text-muted)' }}>
-              {lastActivity}
-            </span>
-          </>
+          <span className="truncate" style={{ color: 'var(--text-muted)' }}>
+            {lastActivity}
+          </span>
         )}
       </div>
 
@@ -199,12 +194,32 @@ export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInf
         )}
         {activeSession?.metrics && (activeSession.metrics.inputTokens > 0 || activeSession.metrics.outputTokens > 0) && (
           <>
-            <span style={{ color: 'var(--text-muted)' }} title="Token usage (input / output)">
+            <span
+              style={{ color: 'var(--text-muted)' }}
+              title={
+                `Tokens (input / output)\n` +
+                `Input: ${activeSession.metrics.inputTokens.toLocaleString()}\n` +
+                `Output: ${activeSession.metrics.outputTokens.toLocaleString()}\n` +
+                (activeSession.metrics.cacheReadTokens
+                  ? `Cache read: ${activeSession.metrics.cacheReadTokens.toLocaleString()}\n`
+                  : '') +
+                (activeSession.metrics.cacheWriteTokens
+                  ? `Cache write: ${activeSession.metrics.cacheWriteTokens.toLocaleString()}\n`
+                  : '') +
+                `\nTotals are accumulated across every turn in this session (reported by the agent's usage telemetry). Numbers in the bar are abbreviated (k = thousand, M = million).`
+              }
+            >
               {formatTokens(activeSession.metrics.inputTokens)}/{formatTokens(activeSession.metrics.outputTokens)}
             </span>
             {activeSession.metrics.cost > 0 && (
-              <span style={{ color: 'var(--text-muted)' }} title="Estimated cost">
-                ${activeSession.metrics.cost.toFixed(4)}
+              <span
+                style={{ color: 'var(--text-muted)' }}
+                title={
+                  `Estimated cost: $${activeSession.metrics.cost.toFixed(4)}\n\n` +
+                  `Calculated by the agent runtime by multiplying each turn's input, output, and cache tokens by the model's per-token price and summing across the session. This is an estimate and may differ from your actual invoice (prompt caching, discounts, and premium-request billing are not all reflected).`
+                }
+              >
+                ${activeSession.metrics.cost.toFixed(2)}
               </span>
             )}
             <span className="mx-0.5" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
@@ -257,6 +272,55 @@ export function StatusBar({ sessions, activeSession, onToggleSettings, devBoxInf
               </div>
             )}
           </span>
+        )}
+        <span className="mx-1" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
+        {onExplode && (
+          <button
+            onClick={onExplode}
+            disabled={explodeDisabled}
+            className="cursor-pointer flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:text-[var(--text-primary)]"
+            style={{ color: 'var(--text-muted)', background: 'none', border: 'none', font: 'inherit', fontSize: 'inherit', padding: 0 }}
+            title="Explode: pop all sessions into their own windows (Ctrl+Shift+E)"
+            aria-label="Explode sessions"
+          >
+            ⧉
+          </button>
+        )}
+        {onCollapseAll && (
+          <button
+            onClick={onCollapseAll}
+            disabled={collapseDisabled}
+            className="cursor-pointer flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:text-[var(--text-primary)]"
+            style={{ color: 'var(--text-muted)', background: 'none', border: 'none', font: 'inherit', fontSize: 'inherit', padding: 0 }}
+            title="Collapse all popped-out sessions back into the main window"
+            aria-label="Collapse all windows"
+          >
+            ⊟
+          </button>
+        )}
+        {onOpenHistory && (
+          <button
+            onClick={onOpenHistory}
+            disabled={historyDisabled}
+            className="cursor-pointer flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed hover:text-[var(--text-primary)]"
+            style={{ color: 'var(--text-muted)', background: 'none', border: 'none', font: 'inherit', fontSize: 'inherit', padding: 0 }}
+            title="View prompt history"
+            aria-label="History"
+          >
+            📜
+          </button>
+        )}
+        <span className="mx-1" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
+        {onToggleCompactMode && (
+          <button
+            onClick={onToggleCompactMode}
+            className="cursor-pointer flex items-center justify-center hover:text-[var(--text-primary)]"
+            style={{ color: compactMode ? 'var(--text-primary)' : 'var(--text-muted)', background: 'none', border: 'none', font: 'inherit', fontSize: 'inherit', padding: 0 }}
+            title={compactMode ? "Expand terminal view" : "Compact mode: hide terminal"}
+            aria-label="Toggle compact mode"
+          >
+            {compactMode ? '⬆' : '⬇'}
+          </button>
         )}
         <span className="mx-1" style={{ color: 'var(--text-muted)' }}>{'\u2502'}</span>
         <button

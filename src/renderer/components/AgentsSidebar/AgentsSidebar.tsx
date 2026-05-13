@@ -5,14 +5,16 @@ import { AgentItem } from './AgentItem'
 import { AgentForm } from './AgentForm'
 import { ToolUsePanel } from '../ToolUsePanel/ToolUsePanel'
 import type { AgentProfile, ProjectFolder } from '@shared/types'
+import { confirmDialog } from '../ConfirmDialog'
 
 interface AgentsSidebarProps {
   activeSessionId: string | null
   prefillAgent?: AgentProfile | null
   onPrefillConsumed?: () => void
+  onAgentLaunched?: (sessionId: string) => void
 }
 
-export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed }: AgentsSidebarProps) {
+export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed, onAgentLaunched }: AgentsSidebarProps) {
   const { groups, saveGroups, launchAgent } = useAgents()
   const [openGroupIndex, setOpenGroupIndex] = useState<number | null>(null)
   const [editingAgent, setEditingAgent] = useState<AgentProfile | null>(null)
@@ -26,6 +28,21 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
   const popupRef = useRef<HTMLDivElement>(null)
   const tabsRef = useRef<HTMLDivElement>(null)
   const groupPickerRef = useRef<HTMLDivElement>(null)
+
+  // Surface async remote-launch failures via modal. Remote launches return
+  // "launched: true" immediately; the actual connect/tunnel/ACP errors
+  // arrive later via this broadcast.
+  useEffect(() => {
+    const api = (window as any).tangentAPI?.agents
+    if (!api?.onLaunchFailed) return
+    const unsub = api.onLaunchFailed((data: { agentName: string; error: string }) => {
+      confirmDialog(`Failed to launch "${data.agentName}":\n\n${data.error}`, {
+        confirmLabel: 'OK',
+        cancelLabel: ''
+      })
+    })
+    return () => unsub?.()
+  }, [])
 
   const openGroup: ProjectFolder | undefined = openGroupIndex !== null ? groups[openGroupIndex] : undefined
 
@@ -59,13 +76,18 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
       if (idx >= openGroup.agents.length) return
       e.preventDefault()
       if (activeSessionId) {
-        launchAgent(openGroup.agents[idx].id, activeSessionId)
+        const agentId = openGroup.agents[idx].id
+        void launchAgent(agentId, activeSessionId).then(result => {
+          if (result && result.launched && onAgentLaunched) {
+            onAgentLaunched(result.sessionId ?? activeSessionId)
+          }
+        })
         setOpenGroupIndex(null)
       }
     }
     window.addEventListener('keydown', handleAgentKey, { capture: true })
     return () => window.removeEventListener('keydown', handleAgentKey, { capture: true })
-  }, [openGroupIndex, openGroup, activeSessionId, launchAgent])
+  }, [openGroupIndex, openGroup, activeSessionId, launchAgent, onAgentLaunched])
 
   // Close popup when clicking outside
   useEffect(() => {
@@ -185,9 +207,11 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
     setOpenGroupIndex(updated.length - 1)
   }, [groups, saveGroups])
 
-  const deleteGroup = useCallback((groupId: string) => {
+  const deleteGroup = useCallback(async (groupId: string) => {
     const group = groups.find(g => g.id === groupId)
-    if (!group || !window.confirm(`Delete project "${group.name}"?`)) return
+    if (!group) return
+    const ok = await confirmDialog(`Delete project "${group.name}"?`, { confirmLabel: 'Delete' })
+    if (!ok) return
     const updated = groups.filter(g => g.id !== groupId)
     saveGroups(updated)
     setOpenGroupIndex(null)
@@ -233,11 +257,25 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
 
   // --- Agent operations ---
 
-  const handleLaunch = useCallback((agentId: string) => {
-    if (!activeSessionId) return
-    launchAgent(agentId, activeSessionId)
+  const handleLaunch = useCallback(async (agentId: string) => {
+    // Pass empty string if no active session; AgentLauncher will create one.
+    const result = await launchAgent(agentId, activeSessionId ?? '')
     setOpenGroupIndex(null)
-  }, [activeSessionId, launchAgent])
+
+    // Notify parent to auto-expand from compact mode
+    if (result && result.launched && onAgentLaunched) {
+      onAgentLaunched(result.sessionId ?? activeSessionId ?? '')
+    }
+
+    if (result && result.launched === false && result.error) {
+      // Surface the actionable error from the main process (e.g. devbox
+      // not running, dev tunnel sign-in required, setup script missing).
+      await confirmDialog(`Failed to launch agent:\n\n${result.error}`, {
+        confirmLabel: 'OK',
+        cancelLabel: ''
+      })
+    }
+  }, [activeSessionId, launchAgent, onAgentLaunched])
 
   const handleSaveAgent = useCallback((agent: AgentProfile) => {
     if (!openGroup || openGroupIndex === null) return
@@ -258,10 +296,12 @@ export function AgentsSidebar({ activeSessionId, prefillAgent, onPrefillConsumed
     setEditingAgent(null)
   }, [openGroup, openGroupIndex, groups, saveGroups])
 
-  const handleDeleteAgent = useCallback((agentId: string) => {
+  const handleDeleteAgent = useCallback(async (agentId: string) => {
     if (!openGroup || openGroupIndex === null) return
     const agent = openGroup.agents.find(a => a.id === agentId)
-    if (!agent || !window.confirm(`Delete agent "${agent.name}"?`)) return
+    if (!agent) return
+    const ok = await confirmDialog(`Delete agent "${agent.name}"?`, { confirmLabel: 'Delete' })
+    if (!ok) return
     const updatedAgents = openGroup.agents.filter(a => a.id !== agentId)
     const updated = groups.map((g, i) =>
       i === openGroupIndex ? { ...g, agents: updatedAgents } : g
