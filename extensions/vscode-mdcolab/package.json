@@ -1,0 +1,73 @@
+{
+  "name": "vscode-mdcolab",
+  "displayName": "mdcolab — Markdown Sharing",
+  "description": "Share Markdown files with mdcolab: a share button in the editor title and a 'Share with mdcolab…' entry in the Share submenu.",
+  "version": "0.1.0",
+  "publisher": "tangent",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "mdcolab.share",
+        "title": "Share with mdcolab…",
+        "category": "mdcolab",
+        "icon": "$(export)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "mdcolab.share",
+          "when": "resourceLangId == markdown"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "mdcolab.share",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@99"
+        }
+      ],
+      "editor/context/share": [
+        {
+          "command": "mdcolab.share",
+          "when": "resourceLangId == markdown",
+          "group": "mdcolab@1"
+        }
+      ],
+      "explorer/context/share": [
+        {
+          "command": "mdcolab.share",
+          "when": "resourceExtname == .md",
+          "group": "mdcolab@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "mdcolab",
+      "properties": {
+        "mdcolab.endpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Optional mdcolab upload endpoint. Leave empty to use a local stub that copies a placeholder link to the clipboard."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
