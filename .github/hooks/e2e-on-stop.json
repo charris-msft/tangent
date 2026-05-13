@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "agentStop": [
+      {
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/hooks/run-e2e-on-stop.ps1",
+        "timeoutSec": 420
+      }
+    ]
+  }
+}

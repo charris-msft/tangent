@@ -8,12 +8,26 @@ Tangent is a standalone Electron terminal app with a built-in Agents sidebar. Us
 
 ```bash
 npm run dev          # electron-vite dev server with HMR
-npm run build        # Production build
+npm run build        # Production build (renderer/main/preload only → out/)
 npm run lint         # ESLint (src/ only)
 npm run test         # Vitest unit tests
 npm run test:watch   # Vitest watch mode
 npm run test:e2e     # Playwright e2e tests
 ```
+
+### Packaging the standalone `Tangent.exe` (CRITICAL)
+
+The user's desktop shortcut points at `D:\git\tangent\release\dist\win-unpacked\Tangent.exe`. Whenever they ask for a "new exe" or "build", **both** steps must run — `npm run build` alone does NOT update the packaged exe:
+
+```bash
+npm run build
+npx electron-builder --dir --config.npmRebuild=false
+```
+
+- `--dir` produces `dist/win-unpacked/Tangent.exe` without building an installer (fast).
+- `--config.npmRebuild=false` is **required** on this machine — the default native rebuild fails on `ffi-napi` due to an MSBuild/preprocess_asm.cmd environment issue. The prebuilt native modules in `node_modules` already match the electron version.
+- Do NOT use `npm run package` — it runs `electron-builder --dir` without the `npmRebuild=false` flag and will fail.
+- The root-level `D:\git\tangent\release\tangent.exe` is legacy/stale and should be ignored. The canonical binary is `dist\win-unpacked\Tangent.exe`.
 
 Run a single unit test file:
 ```bash
@@ -23,6 +37,30 @@ npx vitest run src/shared/__tests__/transitions.test.ts
 Run a single e2e test:
 ```bash
 npx playwright test tests/example.spec.ts
+```
+
+### E2E hook workflow (runs automatically at end of every turn)
+
+`.github/hooks/e2e-on-stop.json` registers an `agentStop` Copilot hook that invokes `scripts/hooks/run-e2e-on-stop.ps1`. After every coding turn:
+
+1. The hook detects whether `src/`, `tests/`, `scripts/`, `.github/`, `electron.vite.config.*`, or `package.json` changed. If not, it exits 0 silently.
+2. If changes are present and `out/main/index.js` exists, it runs `npx playwright test tests/regression --reporter=line,json --timeout=45000` with a 6 min ceiling.
+3. A summary (pass/fail counts, failed test titles) is written to `test-results/hook-report.json` and printed to the transcript.
+
+**Test layout**:
+- `tests/regression/general.spec.ts` — up to **5** load-bearing behaviors (app launches, sessions render, close modal works, status-bar popout buttons render, agent rows clickable). Stable across fixes.
+- `tests/regression/specific.spec.ts` — targeted checks for the **most recent fix**. Rewrite this file each time a new bug is fixed.
+
+**Responsibilities after each fix**:
+1. Add / rewrite `tests/regression/specific.spec.ts` so it would fail if the bug you just fixed returned.
+2. After the hook runs, read `test-results/hook-report.json`. If a failure escaped the general suite, **replace the least-valuable test in `general.spec.ts`** with one that would have caught it (keep the file at ≤ 5 tests).
+3. If the bug the user just reported proves a general suite test is obsolete or too weak, rewrite it in place.
+
+Manual escape hatch: set `TANGENT_SKIP_E2E_HOOK=1` to skip the hook (e.g. docs-only commits). The hook also skips when nothing in `src/` / `tests/` has changed.
+
+Run the regression suite manually:
+```bash
+npm run test:regression
 ```
 
 ## Architecture
