@@ -8,10 +8,13 @@ import { SessionStore } from './session/SessionStore'
 import { SessionManager } from './session/SessionManager'
 import { SdkSessionManager } from './session/SdkSessionManager'
 import { ContextStore } from './session/ContextStore'
+import { TaskTimelineStore } from './session/TaskTimelineStore'
 import { AgentStore } from './agents/AgentStore'
 import { AgentLauncher } from './agents/AgentLauncher'
 import { ConfigStore } from './config/ConfigStore'
 import { registerIpcHandlers } from './ipc/handlers'
+import { registerWindowHandlers } from './ipc/windowHandlers'
+import { windowManager } from './window'
 import { PipeServer } from './config/PipeServer'
 import { DevBoxManager } from './devbox/DevBoxManager'
 import { SshTunnelManager } from './devbox/SshTunnelManager'
@@ -33,8 +36,10 @@ const configStore = new ConfigStore()
 const ptyManager = new PtyManager()
 const sessionStore = new SessionStore()
 const contextStore = new ContextStore(sessionStore)
+const taskTimelineStore = new TaskTimelineStore()
 const sessionManager = new SessionManager(sessionStore, ptyManager)
 sessionManager.setContextStore(contextStore)
+sessionManager.setTimelineStore(taskTimelineStore)
 const sdkSessionManager = new SdkSessionManager(sessionStore, ptyManager)
 sessionManager.setSdkManager(sdkSessionManager)
 const agentStore = new AgentStore()
@@ -96,7 +101,7 @@ function persistSessions(): void {
       }
     }
   } catch (err) {
-    console.warn('[Tangent 2] Failed to persist sessions:', err)
+    console.warn('[Tangent] Failed to persist sessions:', err)
   }
 }
 
@@ -134,11 +139,11 @@ sessionStore.on('agent-promoted', ({ id, agentType, ptyId }: { id: string; agent
 })
 
 function createWindow(): void {
-  // Set app identity so Windows taskbar uses the Tangent 2 icon, not the Electron icon
-  app.setAppUserModelId('com.tangent2.app')
+  // Set app identity so Windows taskbar uses the Tangent icon, not the Electron icon
+  app.setAppUserModelId('com.tangent.app')
 
   mainWindow = new BrowserWindow({
-    title: 'Tangent 2',
+    title: 'Tangent',
     width: 1200,
     height: 800,
     minWidth: 600,
@@ -159,28 +164,37 @@ function createWindow(): void {
     const tangentExe = join(__dirname, '../../tangent.exe')
     if (existsSync(tangentExe)) {
       mainWindow.setAppDetails({
-        appId: 'com.tangent2.app',
+        appId: 'com.tangent.app',
         appIconPath: join(__dirname, '../../assets/tangent.ico'),
         appIconIndex: 0,
         relaunchCommand: `"${tangentExe}"`,
-        relaunchDisplayName: 'Tangent 2'
+        relaunchDisplayName: 'Tangent'
       })
     }
   }
+
+  // Register the main window with windowManager so broadcast() and popout
+  // logic can reach the renderer. Without this, session:created /
+  // session:closed / agents:updated events never arrive in the UI.
+  windowManager.setMainWindow(mainWindow)
 
   registerIpcHandlers({
     sessionManager,
     sessionStore,
     contextStore,
+    taskTimelineStore,
     ptyManager,
     agentStore,
     agentLauncher,
     configStore,
     devBoxManager,
+    devTunnelManager,
     acpClient,
     remoteSessionManager,
     getWindow: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
   })
+
+  registerWindowHandlers(windowManager)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -301,7 +315,7 @@ app.whenReady().then(async () => {
         for (const s of remoteSessions) {
           if (!s.devBoxName || !s.devBoxProject) {
             console.warn(
-              `[Tangent 2] Skipping remote session restore: missing Dev Box info`,
+              `[Tangent] Skipping remote session restore: missing Dev Box info`,
               s.name
             )
             continue
@@ -330,7 +344,7 @@ app.whenReady().then(async () => {
           })
 
           console.log(
-            `[Tangent 2] Remote session restored (needs reconnection): ${s.devBoxName}`
+            `[Tangent] Remote session restored (needs reconnection): ${s.devBoxName}`
           )
         }
         // Select the previously active session by index
@@ -406,7 +420,7 @@ app.whenReady().then(async () => {
             if (resolved) return
             resolved = true
             ptyManager.removeListener('data', onData)
-            console.warn(`[Tangent 2] Shell ready timeout for session ${sessionId}, replaying anyway`)
+            console.warn(`[Tangent] Shell ready timeout for session ${sessionId}, replaying anyway`)
             replayCommand()
           }, SHELL_READY_TIMEOUT_MS)
           ptyManager.on('data', onData)
@@ -416,7 +430,7 @@ app.whenReady().then(async () => {
       }
     }
   } catch (err) {
-    console.warn('[Tangent 2] Failed to restore sessions:', err)
+    console.warn('[Tangent] Failed to restore sessions:', err)
   }
 
   if (!restored) {

@@ -405,7 +405,7 @@ export class DevBoxManager extends EventEmitter {
    * Get the tunnel configuration for a specific Dev Box.
    * Checks per-devbox map first, then falls back to top-level fields.
    */
-  private getTunnelConfig(devBoxName: string): DevBoxTunnelConfig | null {
+  getTunnelConfig(devBoxName: string): DevBoxTunnelConfig | null {
     if (!this.config) return null
 
     // Per-devbox config takes priority (case-insensitive lookup)

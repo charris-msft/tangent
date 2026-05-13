@@ -90,6 +90,19 @@ describe('SystemB', () => {
       expect(statusChanges).toContain('needs_input')
     })
 
+    it('detects Copilot resume-session picker as needs_input', () => {
+      systemB.feed([
+        'Select a session to resume:',
+        '     #    Type          Modified    Created     Summary',
+        '❯ 1.   Local         1m ago      1h ago      Work on routines',
+        '↑↓ to navigate · Enter to select · Esc to cancel · / to search',
+        '❯ '
+      ].join('\n'))
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).toContain('needs_input')
+      expect(statusChanges).not.toContain('agent_ready')
+    })
+
     it('requires shell_ready state for error detection', () => {
       // First, get into shell_ready state
       systemB.feed('PS D:\\git> ')
@@ -390,6 +403,13 @@ describe('SystemB', () => {
 
       // needs_input should not re-trigger; agent_ready should fire via silence timer
       expect(statusChanges).not.toContain('needs_input')
+    })
+
+    it('does not treat picker selection markers as idle prompts', () => {
+      systemB.feed('Select a session to resume:\n❯ 1. Local 1m ago Work on routines\nEnter to select')
+      vi.advanceTimersByTime(600)
+      expect(statusChanges).toContain('needs_input')
+      expect(statusChanges).not.toContain('agent_ready')
     })
   })
 

@@ -36,27 +36,18 @@ function defaultGroups(): ProjectFolder[] {
 
 export class AgentStore {
   private folders: ProjectFolder[] = []
+  /** Preserve the version from the file so a newer Tangent's version isn't downgraded */
+  private fileVersion: number = 2
 
   async load(): Promise<ProjectFolder[]> {
     try {
       const data = await readFile(STORE_PATH, 'utf-8')
-      const parsed = JSON.parse(data)
-      
-      // Migration logic
-      if (parsed.version === 3) {
-        // Already v3 — use as-is
+      const parsed: AgentStoreData = JSON.parse(data)
+      // Accept any version that has a valid groups array — newer Tangent versions
+      // may bump the version number but the groups structure remains compatible
+      if (Array.isArray(parsed.groups) && parsed.groups.length > 0) {
         this.folders = parsed.groups
-      } else if (parsed.version === 2) {
-        // Migrate v2 → v3: add remote field with default { enabled: false }
-        this.folders = parsed.groups.map((folder: ProjectFolder) => ({
-          ...folder,
-          agents: folder.agents.map(agent => ({
-            ...agent,
-            remote: agent.remote || { enabled: false }
-          }))
-        }))
-        // Save migrated data as v3
-        await this.save(this.folders)
+        this.fileVersion = parsed.version
       } else {
         // Unknown version — reset to defaults
         this.folders = defaultGroups()
@@ -69,7 +60,7 @@ export class AgentStore {
 
   async save(folders: ProjectFolder[]): Promise<void> {
     this.folders = folders
-    const data: AgentStoreData = { version: 3, groups: folders }
+    const data: AgentStoreData = { version: this.fileVersion, groups: folders }
     await mkdir(STORE_DIR, { recursive: true })
     await writeFile(STORE_PATH, JSON.stringify(data, null, 2), 'utf-8')
   }

@@ -8,6 +8,7 @@ const tangentAPI = {
     select: (id: string) => ipcRenderer.invoke('session:select', id),
     rename: (id: string, name: string) => ipcRenderer.invoke('session:rename', id, name),
     scanExternal: () => ipcRenderer.invoke('session:scanExternal'),
+    reconnect: (id: string) => ipcRenderer.invoke('session:reconnect', id),
 
     onCreated: (cb: (session: any) => void) => {
       const handler = (_: any, session: any) => cb(session)
@@ -54,11 +55,21 @@ const tangentAPI = {
       const handler = (_: any, groups: any) => cb(groups)
       ipcRenderer.on('agents:updated', handler)
       return () => { ipcRenderer.removeListener('agents:updated', handler) }
+    },
+
+    onLaunchFailed: (cb: (data: { agentId: string; agentName: string; error: string }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('agents:launchFailed', handler)
+      return () => { ipcRenderer.removeListener('agents:launchFailed', handler) }
     }
   },
 
   test: {
-    getSessionStates: () => ipcRenderer.invoke('test:getSessionStates')
+    getSessionStates: () => ipcRenderer.invoke('test:getSessionStates'),
+    setSessionState: (sessionId: string, patch: any) =>
+      ipcRenderer.invoke('test:setSessionState', sessionId, patch),
+    recordTimelineItem: (sessionId: string, promptText: string, responseText?: string) =>
+      ipcRenderer.invoke('test:recordTimelineItem', sessionId, promptText, responseText)
   },
 
   sdk: {
@@ -86,6 +97,22 @@ const tangentAPI = {
       const handler = (_: any, request: any) => cb(request)
       ipcRenderer.on(channel, handler)
       return () => { ipcRenderer.removeListener(channel, handler) }
+    }
+  },
+
+  timeline: {
+    get: (sessionId: string, opts?: { limit?: number; offset?: number }) =>
+      ipcRenderer.invoke('timeline:get', sessionId, opts),
+
+    onItemAdded: (cb: (item: any) => void) => {
+      const handler = (_: any, item: any) => cb(item)
+      ipcRenderer.on('timeline:item-added', handler)
+      return () => { ipcRenderer.removeListener('timeline:item-added', handler) }
+    },
+    onItemUpdated: (cb: (item: any) => void) => {
+      const handler = (_: any, item: any) => cb(item)
+      ipcRenderer.on('timeline:item-updated', handler)
+      return () => { ipcRenderer.removeListener('timeline:item-updated', handler) }
     }
   },
 
@@ -171,6 +198,8 @@ const tangentAPI = {
       ipcRenderer.invoke('devbox:checkHealth', projectName, devBoxName),
     autoStart: (projectName: string, devBoxName: string, reportProgress = false) =>
       ipcRenderer.invoke('devbox:autoStart', projectName, devBoxName, reportProgress),
+    preflight: (projectName: string, devBoxName: string) =>
+      ipcRenderer.invoke('devbox:preflight', projectName, devBoxName),
 
     onStateChanged: (cb: (data: { devBoxName: string; state: string }) => void) => {
       const handler = (_: any, data: any) => cb(data)
@@ -196,6 +225,30 @@ const tangentAPI = {
       const handler = (_: any, data: any) => cb(data)
       ipcRenderer.on('devbox:autoStartProgress', handler)
       return () => { ipcRenderer.removeListener('devbox:autoStartProgress', handler) }
+    },
+
+    // Interactive dev tunnel sign-in. Opens a browser via `devtunnel user login -g`.
+    signIn: (): Promise<{ ok: boolean; message: string }> =>
+      ipcRenderer.invoke('devbox:signIn'),
+    onAuthRequired: (cb: (data: { tunnelId?: string; reason?: string; message: string }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:authRequired', handler)
+      return () => { ipcRenderer.removeListener('devbox:authRequired', handler) }
+    },
+    onSignInStarted: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('devbox:signInStarted', handler)
+      return () => { ipcRenderer.removeListener('devbox:signInStarted', handler) }
+    },
+    onSignInComplete: (cb: (data: { message: string }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:signInComplete', handler)
+      return () => { ipcRenderer.removeListener('devbox:signInComplete', handler) }
+    },
+    onSignInFailed: (cb: (data: { message: string }) => void) => {
+      const handler = (_: any, data: any) => cb(data)
+      ipcRenderer.on('devbox:signInFailed', handler)
+      return () => { ipcRenderer.removeListener('devbox:signInFailed', handler) }
     }
   },
 
@@ -211,6 +264,12 @@ const tangentAPI = {
     isPoppedOut: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('window:isPoppedOut', sessionId),
     getPoppedSessionIds: (): Promise<string[]> => ipcRenderer.invoke('window:getPoppedSessionIds'),
     getDisplays: () => ipcRenderer.invoke('window:getDisplays'),
+    setCompactMode: (compactWidth: number): Promise<boolean> =>
+      ipcRenderer.invoke('window:setCompactMode', compactWidth),
+    restoreFromCompact: (): Promise<boolean> =>
+      ipcRenderer.invoke('window:restoreFromCompact'),
+    isInCompactMode: (): Promise<boolean> =>
+      ipcRenderer.invoke('window:isInCompactMode'),
 
     onPoppedOut: (cb: (sessionId: string) => void) => {
       const handler = (_: any, sessionId: string) => cb(sessionId)

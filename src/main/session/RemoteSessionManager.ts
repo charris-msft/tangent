@@ -54,7 +54,7 @@ export declare interface RemoteSessionManager {
  * 4. Create ACP session (via AcpClient)
  * 5. Launch agent on remote Dev Box
  * 6. Track session in SessionStore with remote state
- * 
+ *
  * Remote session state progression:
  * starting-devbox → syncing-out → tunneling → verifying-acp → running → syncing-back
  */
@@ -85,12 +85,12 @@ export class RemoteSessionManager extends EventEmitter {
 
     // Listen to ACP errors
     this.acpClient.on('acp:error', (error) => {
-      console.warn('[Tangent 2] RemoteSessionManager: ACP error:', error.message)
+      console.warn('[Tangent] RemoteSessionManager: ACP error:', error.message)
     })
 
     // P4.10: Listen to connection failures for auto-reconnect
     this.devBoxConnector.on('connection:failed', (connectionId, error) => {
-      console.warn(`[Tangent 2] RemoteSessionManager: Connection failed: ${connectionId} - ${error}`)
+      console.warn(`[Tangent] RemoteSessionManager: Connection failed: ${connectionId} - ${error}`)
       this._handleConnectionFailure(connectionId)
     })
   }
@@ -155,7 +155,7 @@ export class RemoteSessionManager extends EventEmitter {
     try {
       // Step 1: Connect to Dev Box (includes auto-start + SSH tunnel setup)
       console.log(
-        `[Tangent 2] RemoteSessionManager: Connecting to Dev Box ${agentProfile.remote.devBoxName}...`
+        `[Tangent] RemoteSessionManager: Connecting to Dev Box ${agentProfile.remote.devBoxName}...`
       )
 
       const connectionId = await this.devBoxConnector.connect(
@@ -172,14 +172,14 @@ export class RemoteSessionManager extends EventEmitter {
       }
 
       // Step 2: Check provisioning state (skip provisioning if setup script was already run)
-      console.log(`[Tangent 2] RemoteSessionManager: Checking provisioning...`)
+      console.log(`[Tangent] RemoteSessionManager: Checking provisioning...`)
 
       const isProvisioned = await this.devBoxProvisioner.isProvisioned(
         agentProfile.remote.devBoxName
       )
 
       if (!isProvisioned) {
-        console.log(`[Tangent 2] RemoteSessionManager: Dev Box not yet provisioned, marking as provisioned (setup script should have been run)`)
+        console.log(`[Tangent] RemoteSessionManager: Dev Box not yet provisioned, marking as provisioned (setup script should have been run)`)
         // Mark as provisioned — the setup script handles actual provisioning
         await this.devBoxProvisioner.markProvisioned(
           agentProfile.remote.devBoxName,
@@ -191,13 +191,13 @@ export class RemoteSessionManager extends EventEmitter {
       this._updateState(handle, 'syncing-out')
       this.sessionStore.updateActivity(sessionId, 'Syncing workspace to Dev Box...')
 
-      console.log(`[Tangent 2] RemoteSessionManager: Syncing workspace outbound...`)
+      console.log(`[Tangent] RemoteSessionManager: Syncing workspace outbound...`)
 
       // Build remote workspace path: {root}\{agent-name}\{leaf-folder}
       const connInfo = connectionStatus.connectionInfo
       const remoteWorkspacePath = agentProfile.remote.repoPath
         || buildRemoteWorkspacePath(agentProfile.name, localPath)
-      console.log(`[Tangent 2] RemoteSessionManager: Remote cwd = ${remoteWorkspacePath}`)
+      console.log(`[Tangent] RemoteSessionManager: Remote cwd = ${remoteWorkspacePath}`)
       try {
         const syncResult = await this.devBoxConnector.syncWorkspaceOut(
           connectionId,
@@ -206,14 +206,14 @@ export class RemoteSessionManager extends EventEmitter {
         )
 
         if (!syncResult.success) {
-          console.warn(`[Tangent 2] RemoteSessionManager: Workspace sync skipped: ${syncResult.error}`)
+          console.warn(`[Tangent] RemoteSessionManager: Workspace sync skipped: ${syncResult.error}`)
           // Non-fatal — continue without sync
         } else {
-          console.log(`[Tangent 2] RemoteSessionManager: Workspace synced successfully`)
+          console.log(`[Tangent] RemoteSessionManager: Workspace synced successfully`)
         }
       } catch (syncErr) {
         const msg = syncErr instanceof Error ? syncErr.message : String(syncErr)
-        console.warn(`[Tangent 2] RemoteSessionManager: Workspace sync error (non-fatal): ${msg}`)
+        console.warn(`[Tangent] RemoteSessionManager: Workspace sync error (non-fatal): ${msg}`)
       }
 
       // Step 4+5: Connect to bridge (PTY or ACP mode)
@@ -224,7 +224,7 @@ export class RemoteSessionManager extends EventEmitter {
         this._updateState(handle, 'tunneling')
         this.sessionStore.updateActivity(sessionId, 'Connecting to PTY bridge...')
 
-        console.log(`[Tangent 2] RemoteSessionManager: Connecting PTY via tunnel port ${acpLocalPort}...`)
+        console.log(`[Tangent] RemoteSessionManager: Connecting PTY via tunnel port ${acpLocalPort}...`)
 
         const { createConnection } = await import('net')
         const ptySocket = createConnection({ host: '127.0.0.1', port: acpLocalPort })
@@ -246,7 +246,7 @@ export class RemoteSessionManager extends EventEmitter {
         })
 
         handle.ptySocket = ptySocket
-        console.log(`[Tangent 2] RemoteSessionManager: PTY bridge connected`)
+        console.log(`[Tangent] RemoteSessionManager: PTY bridge connected`)
 
         // Create StatusEngine for remote PTY status detection (OSC progress signals)
         const engine = new StatusEngine(sessionId, '', this.sessionStore)
@@ -265,12 +265,12 @@ export class RemoteSessionManager extends EventEmitter {
         })
 
         ptySocket.on('close', () => {
-          console.log(`[Tangent 2] RemoteSessionManager: PTY socket closed for ${sessionId}`)
+          console.log(`[Tangent] RemoteSessionManager: PTY socket closed for ${sessionId}`)
           this._disposeStatusEngine(sessionId)
         })
 
         ptySocket.on('error', (err: Error) => {
-          console.warn(`[Tangent 2] RemoteSessionManager: PTY socket error: ${err.message}`)
+          console.warn(`[Tangent] RemoteSessionManager: PTY socket error: ${err.message}`)
         })
 
         // Send CWD control frame so bridge spawns Copilot in the right directory
@@ -283,7 +283,7 @@ export class RemoteSessionManager extends EventEmitter {
         cwdFrame.writeUInt16BE(cwdBytes.length, 3)
         cwdBytes.copy(cwdFrame, 5)
         ptySocket.write(cwdFrame)
-        console.log(`[Tangent 2] RemoteSessionManager: Sent CWD control frame: ${remoteWorkspacePath}`)
+        console.log(`[Tangent] RemoteSessionManager: Sent CWD control frame: ${remoteWorkspacePath}`)
 
         // Don't send initial newline — wait for the renderer to send
         // a terminal:resize (with correct size) which triggers the bridge
@@ -294,8 +294,8 @@ export class RemoteSessionManager extends EventEmitter {
         this._updateState(handle, 'tunneling')
         this.sessionStore.updateActivity(sessionId, 'Establishing ACP tunnel...')
 
-        console.log(`[Tangent 2] RemoteSessionManager: Connecting ACP via tunnel...`)
-        console.log(`[Tangent 2] RemoteSessionManager: ACP local port = ${acpLocalPort}`)
+        console.log(`[Tangent] RemoteSessionManager: Connecting ACP via tunnel...`)
+        console.log(`[Tangent] RemoteSessionManager: ACP local port = ${acpLocalPort}`)
 
         try {
           await this.acpClient.connect({
@@ -318,7 +318,7 @@ export class RemoteSessionManager extends EventEmitter {
         this._updateState(handle, 'verifying-acp')
         this.sessionStore.updateActivity(sessionId, 'Connecting to agent...')
 
-        console.log(`[Tangent 2] RemoteSessionManager: Creating ACP session...`)
+        console.log(`[Tangent] RemoteSessionManager: Creating ACP session...`)
 
         const acpConfig: AcpSessionConfig = {
           sessionId,
@@ -330,7 +330,7 @@ export class RemoteSessionManager extends EventEmitter {
         handle.acpSessionId = acpSession.id
 
         console.log(
-          `[Tangent 2] RemoteSessionManager: ACP session created: ${acpSession.id}`
+          `[Tangent] RemoteSessionManager: ACP session created: ${acpSession.id}`
         )
 
         const session = this.sessionStore.get(sessionId)
@@ -348,13 +348,13 @@ export class RemoteSessionManager extends EventEmitter {
       handle.readyAt = Date.now()
 
       console.log(
-        `[Tangent 2] RemoteSessionManager: Remote session ready (${handle.readyAt - handle.startedAt}ms)`
+        `[Tangent] RemoteSessionManager: Remote session ready (${handle.readyAt - handle.startedAt}ms)`
       )
 
       return sessionId
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] RemoteSessionManager: Failed to create session:`, message)
+      console.warn(`[Tangent] RemoteSessionManager: Failed to create session:`, message)
 
       this._disposeStatusEngine(sessionId)
       this._updateState(handle, 'starting-devbox', message)
@@ -371,6 +371,73 @@ export class RemoteSessionManager extends EventEmitter {
    */
   getRemoteSession(sessionId: string): RemoteSessionHandle | undefined {
     return this.remoteSessions.get(sessionId)
+  }
+
+  /**
+   * Manually reconnect a failed / disconnected remote session.
+   * Reuses the stored agent profile + local path from the existing handle,
+   * tears down any stale resources, removes the old session entry, and
+   * launches a fresh remote session. Returns the new session ID.
+   */
+  async reconnectRemoteSession(sessionId: string): Promise<string> {
+    const handle = this.remoteSessions.get(sessionId)
+    if (!handle) {
+      throw new Error(`No remote session handle for ${sessionId}`)
+    }
+
+    const agentProfile = handle.agentProfile
+    const localPath = handle.localPath
+
+    console.log(
+      `[Tangent] RemoteSessionManager: Manual reconnect requested for ${sessionId} (agent=${agentProfile.name})`
+    )
+
+    // Cancel any pending auto-reconnect timer
+    const existingTimer = this.reconnectionTimers.get(sessionId)
+    if (existingTimer) {
+      clearTimeout(existingTimer)
+      this.reconnectionTimers.delete(sessionId)
+    }
+
+    // Dispose stale status engine / decoder
+    this._disposeStatusEngine(sessionId)
+
+    // Tear down stale PTY socket (if any)
+    if (handle.ptySocket) {
+      try {
+        handle.ptySocket.destroy()
+      } catch (err) {
+        console.warn('[Tangent] RemoteSessionManager: error destroying stale PTY socket:', err)
+      }
+      handle.ptySocket = undefined
+    }
+
+    // Close any stale ACP session
+    if (handle.acpSessionId) {
+      try {
+        await this.acpClient.closeSession(sessionId)
+      } catch (err) {
+        console.warn('[Tangent] RemoteSessionManager: error closing stale ACP session:', err)
+      }
+    }
+
+    // Disconnect any stale tunnel (keep Dev Box running)
+    if (handle.connectionId) {
+      try {
+        await this.devBoxConnector.disconnect(handle.connectionId, { stopDevBox: false })
+      } catch (err) {
+        console.warn('[Tangent] RemoteSessionManager: error disconnecting stale tunnel:', err)
+      }
+      handle.connectionId = undefined
+    }
+
+    // Remove stale entries so createRemoteSession starts fresh
+    this.remoteSessions.delete(sessionId)
+    this.sessionStore.remove(sessionId)
+
+    // Launch a fresh remote session (new sessionId)
+    const newSessionId = await this.createRemoteSession(agentProfile, localPath)
+    return newSessionId
   }
 
   /**
@@ -399,7 +466,7 @@ export class RemoteSessionManager extends EventEmitter {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(
-        `[Tangent 2] RemoteSessionManager: Failed to send prompt:`,
+        `[Tangent] RemoteSessionManager: Failed to send prompt:`,
         message
       )
       this.emit('remote:error', sessionId, message)
@@ -454,7 +521,7 @@ export class RemoteSessionManager extends EventEmitter {
     const handle = this.remoteSessions.get(sessionId)
     if (!handle) {
       console.warn(
-        `[Tangent 2] RemoteSessionManager: Session ${sessionId} not found`
+        `[Tangent] RemoteSessionManager: Session ${sessionId} not found`
       )
       return
     }
@@ -472,7 +539,7 @@ export class RemoteSessionManager extends EventEmitter {
         this._updateState(handle, 'syncing-back')
         this.sessionStore.updateActivity(sessionId, 'Syncing workspace from Dev Box...')
 
-        console.log(`[Tangent 2] RemoteSessionManager: Syncing workspace inbound...`)
+        console.log(`[Tangent] RemoteSessionManager: Syncing workspace inbound...`)
 
         const connectionStatus = this.devBoxConnector.getStatus(handle.connectionId)
         if (connectionStatus?.connectionInfo) {
@@ -488,10 +555,10 @@ export class RemoteSessionManager extends EventEmitter {
 
           if (!syncResult.success) {
             console.warn(
-              `[Tangent 2] RemoteSessionManager: Inbound sync failed: ${syncResult.error}`
+              `[Tangent] RemoteSessionManager: Inbound sync failed: ${syncResult.error}`
             )
           } else {
-            console.log(`[Tangent 2] RemoteSessionManager: Workspace synced back successfully`)
+            console.log(`[Tangent] RemoteSessionManager: Workspace synced back successfully`)
           }
         }
       }
@@ -500,9 +567,9 @@ export class RemoteSessionManager extends EventEmitter {
       if (handle.acpSessionId) {
         try {
           await this.acpClient.closeSession(sessionId)
-          console.log(`[Tangent 2] RemoteSessionManager: ACP session closed`)
+          console.log(`[Tangent] RemoteSessionManager: ACP session closed`)
         } catch (error) {
-          console.warn(`[Tangent 2] RemoteSessionManager: Failed to close ACP session:`, error)
+          console.warn(`[Tangent] RemoteSessionManager: Failed to close ACP session:`, error)
         }
       }
 
@@ -511,7 +578,7 @@ export class RemoteSessionManager extends EventEmitter {
         await this.devBoxConnector.disconnect(handle.connectionId, {
           stopDevBox: options?.stopDevBox
         })
-        console.log(`[Tangent 2] RemoteSessionManager: Dev Box disconnected`)
+        console.log(`[Tangent] RemoteSessionManager: Dev Box disconnected`)
       }
 
       // Step 4: Clean up StatusEngine and decoder
@@ -521,11 +588,11 @@ export class RemoteSessionManager extends EventEmitter {
       this.sessionStore.remove(sessionId)
       this.remoteSessions.delete(sessionId)
 
-      console.log(`[Tangent 2] RemoteSessionManager: Remote session closed: ${sessionId}`)
+      console.log(`[Tangent] RemoteSessionManager: Remote session closed: ${sessionId}`)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(
-        `[Tangent 2] RemoteSessionManager: Error during session close:`,
+        `[Tangent] RemoteSessionManager: Error during session close:`,
         message
       )
       this.emit('remote:error', sessionId, message)
@@ -552,7 +619,7 @@ export class RemoteSessionManager extends EventEmitter {
 
     if (!session) {
       console.warn(
-        `[Tangent 2] RemoteSessionManager: No session found for failed connection ${connectionId}`
+        `[Tangent] RemoteSessionManager: No session found for failed connection ${connectionId}`
       )
       return
     }
@@ -560,13 +627,13 @@ export class RemoteSessionManager extends EventEmitter {
     // Only auto-reconnect if we were in running state
     if (session.state !== 'running') {
       console.log(
-        `[Tangent 2] RemoteSessionManager: Session ${session.sessionId} not in running state, skipping reconnect`
+        `[Tangent] RemoteSessionManager: Session ${session.sessionId} not in running state, skipping reconnect`
       )
       return
     }
 
     console.log(
-      `[Tangent 2] RemoteSessionManager: Triggering reconnect for session ${session.sessionId}`
+      `[Tangent] RemoteSessionManager: Triggering reconnect for session ${session.sessionId}`
     )
     this._reconnect(session)
   }
@@ -591,7 +658,7 @@ export class RemoteSessionManager extends EventEmitter {
 
     if (handle.reconnectionAttempts > MAX_RECONNECT_ATTEMPTS) {
       console.warn(
-        `[Tangent 2] RemoteSessionManager: Max reconnection attempts reached for ${handle.sessionId}`
+        `[Tangent] RemoteSessionManager: Max reconnection attempts reached for ${handle.sessionId}`
       )
       this._updateState(handle, 'running', 'Max reconnection attempts reached')
       this.sessionStore.updateStatus(handle.sessionId, 'failed')
@@ -607,7 +674,7 @@ export class RemoteSessionManager extends EventEmitter {
     const delay = BASE_DELAY_MS * Math.pow(2, handle.reconnectionAttempts - 1)
 
     console.log(
-      `[Tangent 2] RemoteSessionManager: Reconnection attempt ${handle.reconnectionAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms for ${handle.sessionId}`
+      `[Tangent] RemoteSessionManager: Reconnection attempt ${handle.reconnectionAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms for ${handle.sessionId}`
     )
 
     this.sessionStore.updateActivity(
@@ -621,7 +688,7 @@ export class RemoteSessionManager extends EventEmitter {
 
       try {
         console.log(
-          `[Tangent 2] RemoteSessionManager: Starting reconnection for ${handle.sessionId}`
+          `[Tangent] RemoteSessionManager: Starting reconnection for ${handle.sessionId}`
         )
 
         // Step 1: Close stale tunnel if exists
@@ -631,11 +698,11 @@ export class RemoteSessionManager extends EventEmitter {
               stopDevBox: false // Keep Dev Box running
             })
             console.log(
-              `[Tangent 2] RemoteSessionManager: Closed stale connection ${handle.connectionId}`
+              `[Tangent] RemoteSessionManager: Closed stale connection ${handle.connectionId}`
             )
           } catch (error) {
             console.warn(
-              `[Tangent 2] RemoteSessionManager: Error closing stale connection:`,
+              `[Tangent] RemoteSessionManager: Error closing stale connection:`,
               error
             )
           }
@@ -660,7 +727,7 @@ export class RemoteSessionManager extends EventEmitter {
         }
 
         console.log(
-          `[Tangent 2] RemoteSessionManager: Dev Box connection re-established: ${connectionId}`
+          `[Tangent] RemoteSessionManager: Dev Box connection re-established: ${connectionId}`
         )
 
         // Step 3: Re-sync workspace (in case local changes occurred during disconnect)
@@ -678,7 +745,7 @@ export class RemoteSessionManager extends EventEmitter {
           throw new Error(`Workspace sync failed: ${syncResult.error}`)
         }
 
-        console.log(`[Tangent 2] RemoteSessionManager: Workspace re-synced`)
+        console.log(`[Tangent] RemoteSessionManager: Workspace re-synced`)
 
         // Step 4: Verify ACP connection and resume session
         this._updateState(handle, 'verifying-acp')
@@ -690,7 +757,7 @@ export class RemoteSessionManager extends EventEmitter {
 
         // Try to resume the existing ACP session
         console.log(
-          `[Tangent 2] RemoteSessionManager: Resuming ACP session ${handle.acpSessionId}`
+          `[Tangent] RemoteSessionManager: Resuming ACP session ${handle.acpSessionId}`
         )
 
         await this.acpClient.resumeSession(handle.sessionId)
@@ -704,12 +771,12 @@ export class RemoteSessionManager extends EventEmitter {
         handle.reconnectionAttempts = 0
 
         console.log(
-          `[Tangent 2] RemoteSessionManager: Reconnection successful for ${handle.sessionId}`
+          `[Tangent] RemoteSessionManager: Reconnection successful for ${handle.sessionId}`
         )
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.warn(
-          `[Tangent 2] RemoteSessionManager: Reconnection attempt ${handle.reconnectionAttempts} failed:`,
+          `[Tangent] RemoteSessionManager: Reconnection attempt ${handle.reconnectionAttempts} failed:`,
           message
         )
 
@@ -756,7 +823,7 @@ export class RemoteSessionManager extends EventEmitter {
     }
 
     console.log(
-      `[Tangent 2] RemoteSessionManager: Switching Dev Box from ${handle.agentProfile.remote?.devBoxName} to ${newDevBoxName}`
+      `[Tangent] RemoteSessionManager: Switching Dev Box from ${handle.agentProfile.remote?.devBoxName} to ${newDevBoxName}`
     )
 
     try {
@@ -766,7 +833,7 @@ export class RemoteSessionManager extends EventEmitter {
         await this.devBoxConnector.disconnect(handle.connectionId, {
           stopDevBox: false
         })
-        console.log(`[Tangent 2] RemoteSessionManager: Disconnected from current Dev Box`)
+        console.log(`[Tangent] RemoteSessionManager: Disconnected from current Dev Box`)
       }
 
       // Step 2: Connect to new Dev Box
@@ -786,7 +853,7 @@ export class RemoteSessionManager extends EventEmitter {
         throw new Error('Dev Box connection failed to reach ready state')
       }
 
-      console.log(`[Tangent 2] RemoteSessionManager: Connected to ${newDevBoxName}`)
+      console.log(`[Tangent] RemoteSessionManager: Connected to ${newDevBoxName}`)
 
       // Step 3: Sync workspace out to new Dev Box
       this._updateState(handle, 'syncing-out')
@@ -803,7 +870,7 @@ export class RemoteSessionManager extends EventEmitter {
         throw new Error(`Workspace sync failed: ${syncResult.error}`)
       }
 
-      console.log(`[Tangent 2] RemoteSessionManager: Workspace synced to new Dev Box`)
+      console.log(`[Tangent] RemoteSessionManager: Workspace synced to new Dev Box`)
 
       // Step 4: Resume ACP session (cloud-synced session ID)
       this._updateState(handle, 'verifying-acp')
@@ -815,7 +882,7 @@ export class RemoteSessionManager extends EventEmitter {
 
       await this.acpClient.resumeSession(sessionId)
 
-      console.log(`[Tangent 2] RemoteSessionManager: ACP session resumed on new Dev Box`)
+      console.log(`[Tangent] RemoteSessionManager: ACP session resumed on new Dev Box`)
 
       // Step 5: Update agent profile's remote.devBoxName
       handle.agentProfile.remote!.devBoxName = newDevBoxName
@@ -844,11 +911,11 @@ export class RemoteSessionManager extends EventEmitter {
       this.sessionStore.updateStatus(sessionId, 'agent_ready')
       this.sessionStore.updateActivity(sessionId, `Switched to ${newDevBoxName}`)
 
-      console.log(`[Tangent 2] RemoteSessionManager: Successfully switched to ${newDevBoxName}`)
+      console.log(`[Tangent] RemoteSessionManager: Successfully switched to ${newDevBoxName}`)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(
-        `[Tangent 2] RemoteSessionManager: Failed to switch Dev Box:`,
+        `[Tangent] RemoteSessionManager: Failed to switch Dev Box:`,
         message
       )
       this.sessionStore.updateStatus(sessionId, 'failed')
@@ -874,7 +941,7 @@ export class RemoteSessionManager extends EventEmitter {
     }
 
     console.log(
-      `[Tangent 2] RemoteSessionManager: Converting remote session ${sessionId} to local`
+      `[Tangent] RemoteSessionManager: Converting remote session ${sessionId} to local`
     )
 
     try {
@@ -896,10 +963,10 @@ export class RemoteSessionManager extends EventEmitter {
 
           if (!syncResult.success) {
             console.warn(
-              `[Tangent 2] RemoteSessionManager: Final sync failed: ${syncResult.error}`
+              `[Tangent] RemoteSessionManager: Final sync failed: ${syncResult.error}`
             )
           } else {
-            console.log(`[Tangent 2] RemoteSessionManager: Final sync completed`)
+            console.log(`[Tangent] RemoteSessionManager: Final sync completed`)
           }
         }
       }
@@ -910,16 +977,16 @@ export class RemoteSessionManager extends EventEmitter {
         await this.devBoxConnector.disconnect(handle.connectionId, {
           stopDevBox: false
         })
-        console.log(`[Tangent 2] RemoteSessionManager: Dev Box disconnected`)
+        console.log(`[Tangent] RemoteSessionManager: Dev Box disconnected`)
       }
 
       // Step 3: Close ACP session
       if (handle.acpSessionId) {
         try {
           await this.acpClient.closeSession(sessionId)
-          console.log(`[Tangent 2] RemoteSessionManager: ACP session closed`)
+          console.log(`[Tangent] RemoteSessionManager: ACP session closed`)
         } catch (error) {
-          console.warn(`[Tangent 2] RemoteSessionManager: Failed to close ACP session:`, error)
+          console.warn(`[Tangent] RemoteSessionManager: Failed to close ACP session:`, error)
         }
       }
 
@@ -960,12 +1027,12 @@ export class RemoteSessionManager extends EventEmitter {
       this.remoteSessions.delete(sessionId)
 
       console.log(
-        `[Tangent 2] RemoteSessionManager: Successfully converted to local session`
+        `[Tangent] RemoteSessionManager: Successfully converted to local session`
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(
-        `[Tangent 2] RemoteSessionManager: Failed to continue locally:`,
+        `[Tangent] RemoteSessionManager: Failed to continue locally:`,
         message
       )
       this.sessionStore.updateStatus(sessionId, 'failed')

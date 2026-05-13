@@ -133,7 +133,7 @@ export class SshTunnelManager extends EventEmitter {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (err: any, stream: any) => {
             if (err) {
-              console.warn('[Tangent 2] SSH tunnel forwardOut error:', err.message)
+              console.warn('[Tangent] SSH tunnel forwardOut error:', err.message)
               localSocket.destroy()
               return
             }
@@ -146,7 +146,7 @@ export class SshTunnelManager extends EventEmitter {
       })
 
       server.on('error', (err: any) => {
-        console.warn('[Tangent 2] SSH tunnel local server error:', err.message)
+        console.warn('[Tangent] SSH tunnel local server error:', err.message)
         state.status = 'error'
         state.error = err.message
         this.emit('tunnel:error', { id: state.id, error: err.message })
@@ -164,7 +164,7 @@ export class SshTunnelManager extends EventEmitter {
     })
 
     client.on('error', (err: any) => {
-      console.warn('[Tangent 2] SSH client error:', err.message)
+      console.warn('[Tangent] SSH client error:', err.message)
       state.status = 'error'
       state.error = err.message
       this.emit('tunnel:error', { id: state.id, error: err.message })
@@ -211,7 +211,7 @@ export class SshTunnelManager extends EventEmitter {
 
     if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       console.warn(
-        '[Tangent 2] SSH tunnel max reconnect attempts reached for',
+        '[Tangent] SSH tunnel max reconnect attempts reached for',
         state.id
       )
       state.status = 'error'
@@ -273,7 +273,7 @@ export class SshTunnelManager extends EventEmitter {
 
     socket.on('error', () => {
       if (!didConnect) {
-        console.warn('[Tangent 2] SSH tunnel health check failed for', state.id)
+        console.warn('[Tangent] SSH tunnel health check failed for', state.id)
         state.status = 'error'
         state.error = 'Health check failed'
         this.emit('tunnel:error', { id: state.id, error: state.error })
@@ -283,7 +283,7 @@ export class SshTunnelManager extends EventEmitter {
     })
 
     socket.on('timeout', () => {
-      console.warn('[Tangent 2] SSH tunnel health check timeout for', state.id)
+      console.warn('[Tangent] SSH tunnel health check timeout for', state.id)
       state.status = 'error'
       state.error = 'Health check timeout'
       this.emit('tunnel:error', { id: state.id, error: state.error })

@@ -13,10 +13,10 @@ import type { AcpSession } from '@shared/acp-types'
 
 /**
  * P4.16: Remote Session Integration Tests
- * 
+ *
  * Comprehensive end-to-end tests for the full remote session lifecycle.
  * All external dependencies are mocked to test orchestration logic.
- * 
+ *
  * Tests cover:
  * 1. Remote session creation — AgentProfile with remote.enabled → full flow
  * 2. Workspace sync — outbound on connect, inbound after agent turn
@@ -1011,7 +1011,7 @@ describe('Remote Session Integration', () => {
       mockAcpClient.emit('acp:error', new Error('WebSocket closed unexpectedly'))
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        '[Tangent 2] RemoteSessionManager: ACP error:',
+        '[Tangent] RemoteSessionManager: ACP error:',
         'WebSocket closed unexpectedly'
       )
 

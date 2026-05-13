@@ -24,10 +24,10 @@ export interface SyncListenerStatus {
 
 /**
  * Listens for and orchestrates incoming sync requests from Dev Box hooks.
- * 
+ *
  * When agentStop hook fires on Dev Box, it triggers rsync back to local machine.
  * SyncListener wraps RsyncManager.syncInbound() and monitors for hook-triggered syncs.
- * 
+ *
  * Events:
  * - sync:incoming - { timestamp: Date, localPath: string, remotePath: string }
  * - sync:complete - { timestamp: Date, fileCount: number, byteCount: number, duration: number }
@@ -61,7 +61,7 @@ export class SyncListener extends EventEmitter {
     sshUser: string = 'azureuser'
   ): void {
     if (this.isActive) {
-      console.warn('[Tangent 2] SyncListener already active for', this.localPath)
+      console.warn('[Tangent] SyncListener already active for', this.localPath)
       return
     }
 
@@ -71,7 +71,7 @@ export class SyncListener extends EventEmitter {
     this.sshUser = sshUser
     this.isActive = true
 
-    console.log('[Tangent 2] SyncListener started for', localPath, '→', sshHost)
+    console.log('[Tangent] SyncListener started for', localPath, '→', sshHost)
   }
 
   /**
@@ -89,7 +89,7 @@ export class SyncListener extends EventEmitter {
     this.sshHost = undefined
     this.sshUser = undefined
 
-    console.log('[Tangent 2] SyncListener stopped')
+    console.log('[Tangent] SyncListener stopped')
   }
 
   /**
@@ -99,7 +99,7 @@ export class SyncListener extends EventEmitter {
   async triggerInboundSync(): Promise<RsyncResult> {
     if (!this.isActive || !this.localPath || !this.remotePath || !this.sshHost || !this.sshUser) {
       const error = 'SyncListener not active or not configured'
-      console.warn('[Tangent 2]', error)
+      console.warn('[Tangent]', error)
       return {
         success: false,
         bytesTransferred: 0,
@@ -127,7 +127,7 @@ export class SyncListener extends EventEmitter {
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      console.warn('[Tangent 2] Inbound sync failed:', err.message)
+      console.warn('[Tangent] Inbound sync failed:', err.message)
 
       this.emit('sync:error', {
         timestamp: new Date(),
@@ -150,7 +150,7 @@ export class SyncListener extends EventEmitter {
   async triggerInboundSyncWithConflictCheck(): Promise<RsyncResult> {
     if (!this.isActive || !this.localPath || !this.remotePath || !this.sshHost || !this.sshUser) {
       const error = 'SyncListener not active or not configured'
-      console.warn('[Tangent 2]', error)
+      console.warn('[Tangent]', error)
       return {
         success: false,
         bytesTransferred: 0,
@@ -178,7 +178,7 @@ export class SyncListener extends EventEmitter {
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      console.warn('[Tangent 2] Inbound sync with conflict check failed:', err.message)
+      console.warn('[Tangent] Inbound sync with conflict check failed:', err.message)
 
       this.emit('sync:error', {
         timestamp: new Date(),

@@ -11,12 +11,20 @@ export class PtyManager extends EventEmitter {
 
   spawn(id: string, cwd: string): pty.IPty {
     const shell = 'pwsh.exe'
+    // Advertise hyperlink support so CLIs emit clickable OSC 8 links instead of
+    // falling back to "text (url)" duplicates. xterm.js natively renders OSC 8.
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      TERM_PROGRAM: process.env.TERM_PROGRAM || 'Tangent',
+      FORCE_HYPERLINK: '1',
+      COLORTERM: process.env.COLORTERM || 'truecolor'
+    }
     const proc = pty.spawn(shell, [], {
       name: 'xterm-256color',
       cols: 80,
       rows: 30,
       cwd,
-      env: process.env as Record<string, string>
+      env
     })
 
     this.instances.set(id, proc)

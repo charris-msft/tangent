@@ -84,7 +84,7 @@ function spawnCopilot(cols, rows) {
         cols: cols,
         rows: rows,
         cwd: pendingCwd,
-        env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' }
+        env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1', TERM_PROGRAM: 'Tangent', FORCE_HYPERLINK: '1' }
       })
     } catch (spawnErr) {
       console.error(`❌ PTY spawn failed: ${spawnErr.message}`)
@@ -120,7 +120,7 @@ function spawnCopilot(cols, rows) {
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: isWindows,
     cwd: pendingCwd,
-    env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1', COLUMNS: String(cols), LINES: String(rows) }
+    env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1', TERM_PROGRAM: 'Tangent', FORCE_HYPERLINK: '1', COLUMNS: String(cols), LINES: String(rows) }
   })
   console.log(`🚀 Copilot CLI spawned (PID ${copilotProc.pid}) — no PTY, limited TUI`)
 

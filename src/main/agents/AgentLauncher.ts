@@ -3,61 +3,61 @@ import type { PtyManager } from '../pty/PtyManager'
 import type { SessionStore } from '../session/SessionStore'
 import type { SessionManager } from '../session/SessionManager'
 import type { RemoteSessionManager } from '../session/RemoteSessionManager'
-import { existsSync } from 'fs'
+import { EventEmitter } from 'events'
 
 function psEscape(value: string): string {
   return value.replace(/'/g, "''")
 }
 
-// Local dev build of Copilot CLI — used by Tangent only, not installed globally
-const LOCAL_CLI_PATH = 'D:\\git\\tools\\copilot-agent-runtime\\dist-cli\\index.js'
-
 function isCopilotAgent(agent: AgentProfile): boolean {
   return agent.command.includes('copilot')
 }
 
-function resolveCopilotCommand(agent: AgentProfile): string {
-  // Use local dev build if available
-  if (isCopilotAgent(agent) && existsSync(LOCAL_CLI_PATH)) {
-    return `node '${psEscape(LOCAL_CLI_PATH)}'`
-  }
-  return agent.command
-}
-
-export class AgentLauncher {
+export class AgentLauncher extends EventEmitter {
   constructor(
     private ptyManager: PtyManager,
     private sessionStore: SessionStore,
     private sessionManager: SessionManager,
     private remoteSessionManager?: RemoteSessionManager
-  ) {}
+  ) { super() }
 
-  launch(agent: AgentProfile, sessionId: string): void {
+  launch(agent: AgentProfile, sessionId: string): string {
     // P4.6: Check if this is a remote agent and delegate to RemoteSessionManager
     if (agent.remote?.enabled) {
-      this._launchRemote(agent, sessionId)
-      return
+      return this._launchRemote(agent, sessionId)
     }
 
     // Original local launch path
-    this._launchLocal(agent, sessionId)
+    return this._launchLocal(agent, sessionId)
   }
 
-  private _launchLocal(agent: AgentProfile, sessionId: string): void {
+  private _launchLocal(agent: AgentProfile, sessionId: string): string {
     let targetSessionId = sessionId
 
     if (agent.launchTarget === 'newTab') {
       const currentSession = this.sessionStore.get(sessionId)
-      if (!currentSession) return
-      const newSession = this.sessionManager.create(currentSession.folderPath)
+      // Fall back to creating a fresh session if the provided one is gone
+      const cwd = currentSession?.folderPath
+      const newSession = this.sessionManager.create(cwd)
       targetSessionId = newSession.id
     } else if (agent.launchTarget === 'path' && agent.cwdPath) {
       const newSession = this.sessionManager.create(agent.cwdPath)
       targetSessionId = newSession.id
+    } else {
+      // currentTab (default). If no valid session, create one.
+      const currentSession = this.sessionStore.get(sessionId)
+      if (!currentSession) {
+        console.warn(`[Tangent] AgentLauncher: no active session for agent "${agent.name}", creating one`)
+        const newSession = this.sessionManager.create()
+        targetSessionId = newSession.id
+      }
     }
 
     const targetSession = this.sessionStore.get(targetSessionId)
-    if (!targetSession) return
+    if (!targetSession) {
+      console.warn(`[Tangent] AgentLauncher: target session ${targetSessionId} not found after creation attempt`)
+      return
+    }
 
     const lines: string[] = []
 
@@ -73,7 +73,7 @@ export class AgentLauncher {
     const extraArgs = isCopilot ? ['--ui-server', '--port', '0'] : []
     const cmdArgs = [...agent.args, ...extraArgs]
 
-    const resolvedCmd = resolveCopilotCommand(agent)
+    const resolvedCmd = agent.command
     const args = cmdArgs.map(a => `'${psEscape(a)}'`).join(' ')
     const cmd = args ? `${resolvedCmd} ${args}` : resolvedCmd
     lines.push(cmd)
@@ -98,21 +98,23 @@ export class AgentLauncher {
     if (isCopilot && this.sessionManager.sdkManager) {
       this.sessionManager.sdkManager.attachToSession(targetSessionId, targetSession.ptyId)
     }
+
+    return targetSessionId
   }
 
   /**
    * Launch an agent remotely on a Dev Box via RemoteSessionManager.
    * P4.6: Remote agent routing
    */
-  private async _launchRemote(agent: AgentProfile, sessionId: string): Promise<void> {
+  private _launchRemote(agent: AgentProfile, sessionId: string): string {
     if (!this.remoteSessionManager) {
-      console.warn('[Tangent 2] AgentLauncher: Remote agent requested but RemoteSessionManager not available')
-      return
+      console.warn('[Tangent] AgentLauncher: Remote agent requested but RemoteSessionManager not available')
+      return sessionId
     }
 
     if (!agent.remote?.enabled) {
-      console.warn('[Tangent 2] AgentLauncher: _launchRemote called without remote.enabled')
-      return
+      console.warn('[Tangent] AgentLauncher: _launchRemote called without remote.enabled')
+      return sessionId
     }
 
     // Determine target workspace path
@@ -125,26 +127,33 @@ export class AgentLauncher {
       // Use current session's folder path
       const currentSession = this.sessionStore.get(sessionId)
       if (!currentSession) {
-        console.warn('[Tangent 2] AgentLauncher: Current session not found for remote launch')
-        return
+        console.warn('[Tangent] AgentLauncher: Current session not found for remote launch')
+        return sessionId
       }
       localPath = currentSession.folderPath
     }
 
-    try {
-      console.log(`[Tangent 2] AgentLauncher: Launching remote agent ${agent.name} at ${localPath}`)
-      
-      // RemoteSessionManager handles full lifecycle:
-      // - Dev Box start
-      // - Provisioning check
-      // - Workspace sync
-      // - ACP session creation
-      await this.remoteSessionManager.createRemoteSession(agent, localPath)
-      
-      console.log(`[Tangent 2] AgentLauncher: Remote agent ${agent.name} launched successfully`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] AgentLauncher: Remote launch failed:`, message)
-    }
+    // Launch async (errors emitted via 'launch:failed' event)
+    void (async () => {
+      try {
+        console.log(`[Tangent] AgentLauncher: Launching remote agent ${agent.name} at ${localPath}`)
+
+        // RemoteSessionManager handles full lifecycle:
+        // - Dev Box start
+        // - Provisioning check
+        // - Workspace sync
+        // - ACP session creation
+        await this.remoteSessionManager!.createRemoteSession(agent, localPath)
+
+        console.log(`[Tangent] AgentLauncher: Remote agent ${agent.name} launched successfully`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[Tangent] AgentLauncher: Remote launch failed:`, message)
+        this.emit('launch:failed', { agentId: agent.id, agentName: agent.name, error: message })
+      }
+    })()
+
+    // Return the sessionId immediately (remote session will be created asynchronously)
+    return sessionId
   }
 }

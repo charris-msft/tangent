@@ -6,7 +6,7 @@ import { EventEmitter } from 'events'
 // Mock RsyncManager - must use vi.fn() factory pattern for hoisting
 vi.mock('../RsyncManager', () => {
   const { EventEmitter } = require('events')
-  
+
   return {
     RsyncManager: class extends EventEmitter {
       syncInbound = vi.fn()
@@ -53,16 +53,16 @@ describe('SyncListener', () => {
 
     it('should not start if already active', () => {
       listener.startListening(testLocalPath, testRemotePath, testSshHost, testSshUser)
-      
+
       // Try to start again with different path
       const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       listener.startListening('/other/path', testRemotePath, testSshHost, testSshUser)
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        '[Tangent 2] SyncListener already active for',
+        '[Tangent] SyncListener already active for',
         testLocalPath
       )
-      
+
       // Should still have original path
       const status = listener.getStatus()
       expect(status.localPath).toBe(testLocalPath)
@@ -286,7 +286,7 @@ describe('SyncListener', () => {
 
       const history = listener.getHistory()
       expect(history).toHaveLength(10)
-      
+
       // Should keep newest entries (filesSynced 14, 13, 12, ...)
       expect(history[0].fileCount).toBe(14)
       expect(history[9].fileCount).toBe(5)

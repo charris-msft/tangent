@@ -9,8 +9,8 @@ import type { AgentProfile } from '@shared/types'
 
 const PIPE_PATH =
   platform() === 'win32'
-    ? '\\\\.\\pipe\\tangent-2-config'
-    : '/tmp/tangent-2-config.sock'
+    ? '\\\\.\\pipe\\tangent-config'
+    : '/tmp/tangent-config.sock'
 
 interface RpcRequest {
   method: string

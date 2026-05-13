@@ -68,7 +68,7 @@ export class DevBoxConnector extends EventEmitter {
     sshClientFactory?: () => any
   ) {
     super()
-    
+
     // Allow test injection of SSH client factory
     this.sshClientFactory = sshClientFactory || (() => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -104,6 +104,24 @@ export class DevBoxConnector extends EventEmitter {
         )
       }
 
+      // Preflight: check devtunnel sign-in status up-front so we can give
+      // a clear, actionable error before anything else times out.
+      if (this.devTunnelManager) {
+        const auth = await this.devTunnelManager.checkAuth()
+        if (!auth.signedIn) {
+          this.devTunnelManager.emit('auth:required', {
+            reason: 'preflight-check',
+            detail: auth.message ?? 'not signed in',
+            message: 'Dev tunnel sign-in required. Click "Sign in" to open GitHub authentication.'
+          })
+          throw new Error(
+            `Not signed in to dev tunnels (${auth.message ?? 'no identity'}). ` +
+            `Click the "Sign in to dev tunnels" banner in Tangent, or run 'devtunnel user login -g' in a terminal.`
+          )
+        }
+        console.log(`[Tangent] DevTunnel signed in${auth.identity ? ` as ${auth.identity}` : ''}`)
+      }
+
       // Step 1: Auto-start Dev Box
       this._updateState(connection, 'starting-devbox')
       this.emit('connection:starting', connectionId)
@@ -112,7 +130,7 @@ export class DevBoxConnector extends EventEmitter {
         projectName,
         devBoxName,
         (state: DevBoxProvisioningState) => {
-          console.log(`[Tangent 2] Dev Box ${devBoxName} state: ${state}`)
+          console.log(`[Tangent] Dev Box ${devBoxName} state: ${state}`)
         }
       )
 
@@ -129,7 +147,7 @@ export class DevBoxConnector extends EventEmitter {
         )
       }
 
-      console.log(`[Tangent 2] Dev Box ${devBoxName} tunnel: ${devBox.connectionInfo.tunnelId ?? devBox.connectionInfo.sshHost} as ${devBox.connectionInfo.sshUser}`)
+      console.log(`[Tangent] Dev Box ${devBoxName} tunnel: ${devBox.connectionInfo.tunnelId ?? devBox.connectionInfo.sshHost} as ${devBox.connectionInfo.sshUser}`)
 
       // Step 2: Connect via devtunnel CLI (direct ACP port forwarding)
       this._updateState(connection, 'tunneling')
@@ -140,9 +158,9 @@ export class DevBoxConnector extends EventEmitter {
       // If we have a DevTunnelManager and a tunnel ID, use `devtunnel connect`
       // to get authenticated direct port forwarding to ACP (no SSH middleman)
       if (this.devTunnelManager && devBox.connectionInfo.tunnelId) {
-        console.log(`[Tangent 2] Using devtunnel connect for ${devBox.connectionInfo.tunnelId}...`)
+        console.log(`[Tangent] Using devtunnel connect for ${devBox.connectionInfo.tunnelId}...`)
         const tunnelPorts = await this.devTunnelManager.connect(devBox.connectionInfo.tunnelId)
-        
+
         acpLocalPort = tunnelPorts.acpPort
         if (!acpLocalPort) {
           throw new Error(
@@ -151,9 +169,9 @@ export class DevBoxConnector extends EventEmitter {
           )
         }
 
-        console.log(`[Tangent 2] DevTunnel mapped ACP port ${REMOTE_PORTS.ACP_REMOTE} → localhost:${acpLocalPort}`)
+        console.log(`[Tangent] DevTunnel mapped ACP port ${REMOTE_PORTS.ACP_REMOTE} → localhost:${acpLocalPort}`)
         if (tunnelPorts.sshPort) {
-          console.log(`[Tangent 2] DevTunnel mapped SSH port 22 → localhost:${tunnelPorts.sshPort} (available for rsync)`)
+          console.log(`[Tangent] DevTunnel mapped SSH port 22 → localhost:${tunnelPorts.sshPort} (available for rsync)`)
         }
       } else {
         throw new Error('DevTunnelManager not configured or tunnel ID missing')
@@ -161,10 +179,33 @@ export class DevBoxConnector extends EventEmitter {
 
       connection.acpLocalPort = acpLocalPort
 
-      // Step 3: Verify ACP port is reachable
+      // Step 3: Verify ACP port is reachable.
+      // The ACP server (embedded `copilot --ui-server`) typically needs
+      // 20-45s to finish booting after the Dev Box reaches Running state.
       this._updateState(connection, 'verifying')
 
-      await this._waitForAcpReady(acpLocalPort, 5000) // 5s timeout
+      try {
+        await this._waitForAcpReady(acpLocalPort, 60_000)
+      } catch (err) {
+        // Enrich the timeout error with a current Dev Box state check so
+        // the user knows whether to retry, sign in, or run setup.
+        const base = err instanceof Error ? err.message : String(err)
+        let hint = ''
+        try {
+          const current = await this.devBoxManager.getDevBox(projectName, devBoxName)
+          if (current) {
+            hint = ` Dev Box state: ${current.state}.`
+            if (current.state !== 'Running') {
+              hint += ' The Dev Box is not fully running — try again in a moment.'
+            } else {
+              hint += ' The agent server may still be starting. ' +
+                'Verify that the setup script has been run on the Dev Box ' +
+                `(port ${REMOTE_PORTS.ACP_REMOTE} must be listening).`
+            }
+          }
+        } catch { /* ignore enrichment failure */ }
+        throw new Error(`${base}.${hint}`)
+      }
 
       // Step 5: Ready!
       this._updateState(connection, 'ready')
@@ -174,7 +215,7 @@ export class DevBoxConnector extends EventEmitter {
       return connectionId
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Connection failed for ${devBoxName}:`, message)
+      console.warn(`[Tangent] Connection failed for ${devBoxName}:`, message)
       this._updateState(connection, 'failed', message)
       this.emit('connection:failed', connectionId, message)
       throw error
@@ -184,7 +225,7 @@ export class DevBoxConnector extends EventEmitter {
   async disconnect(connectionId: string, options?: { stopDevBox?: boolean }): Promise<void> {
     const connection = this.connections.get(connectionId)
     if (!connection) {
-      console.warn(`[Tangent 2] Connection ${connectionId} not found`)
+      console.warn(`[Tangent] Connection ${connectionId} not found`)
       return
     }
 
@@ -198,10 +239,10 @@ export class DevBoxConnector extends EventEmitter {
       if (options?.stopDevBox) {
         try {
           await this.devBoxManager.stopDevBox(connection.projectName, connection.devBoxName)
-          console.log(`[Tangent 2] Dev Box ${connection.devBoxName} stopped`)
+          console.log(`[Tangent] Dev Box ${connection.devBoxName} stopped`)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          console.warn(`[Tangent 2] Failed to stop Dev Box:`, message)
+          console.warn(`[Tangent] Failed to stop Dev Box:`, message)
         }
       }
 
@@ -210,7 +251,7 @@ export class DevBoxConnector extends EventEmitter {
       this.connections.delete(connectionId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Error during disconnect:`, message)
+      console.warn(`[Tangent] Error during disconnect:`, message)
       this._updateState(connection, 'failed', message)
     }
   }
@@ -235,7 +276,7 @@ export class DevBoxConnector extends EventEmitter {
 
     try {
       this.emit('connection:syncing', connectionId)
-      
+
       const result = await this.rsyncManager.syncOutbound(
         localPath,
         remoteBasePath,
@@ -244,17 +285,17 @@ export class DevBoxConnector extends EventEmitter {
       )
 
       if (!result.success) {
-        console.warn(`[Tangent 2] Workspace sync failed:`, result.error)
+        console.warn(`[Tangent] Workspace sync failed:`, result.error)
         return { success: false, error: result.error }
       }
 
       console.log(
-        `[Tangent 2] Workspace synced: ${result.filesSynced} files, ${result.bytesTransferred} bytes`
+        `[Tangent] Workspace synced: ${result.filesSynced} files, ${result.bytesTransferred} bytes`
       )
       return { success: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(`[Tangent 2] Workspace sync error:`, message)
+      console.warn(`[Tangent] Workspace sync error:`, message)
       return { success: false, error: message }
     }
   }
@@ -294,7 +335,7 @@ export class DevBoxConnector extends EventEmitter {
       })
 
       client.on('error', (err: any) => {
-        console.warn('[Tangent 2] SSH client connection error:', err.message)
+        console.warn('[Tangent] SSH client connection error:', err.message)
         reject(err)
       })
 
@@ -322,28 +363,28 @@ export class DevBoxConnector extends EventEmitter {
     while (Date.now() - startTime < timeoutMs) {
       try {
         await new Promise<void>((resolve, reject) => {
-          const socket = netCreateConnection({ 
-            port: localPort, 
+          const socket = netCreateConnection({
+            port: localPort,
             host: '127.0.0.1',
-            timeout: 1000 
+            timeout: 1000
           })
-          
+
           socket.on('connect', () => {
             socket.end()
             resolve()
           })
-          
+
           socket.on('error', (err: Error) => {
             reject(err)
           })
-          
+
           socket.on('timeout', () => {
             socket.destroy()
             reject(new Error('Socket timeout'))
           })
         })
-        
-        console.log(`[Tangent 2] ACP port ${localPort} is reachable`)
+
+        console.log(`[Tangent] ACP port ${localPort} is reachable`)
         return
       } catch (err) {
         // Port not ready yet, continue polling

@@ -13,9 +13,9 @@ const RULES: DetectionRule[] = [
   { priority: 2, pattern: /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⊙◐◑◒◓]/, status: 'processing' },
   { priority: 3, pattern: /[Tt]hinking/, status: 'processing' },
   { priority: 4, pattern: /running tool:|executing command:|Reading file|Writing file/i, status: 'tool_executing' },
-  { priority: 5, pattern: /Asking user|Other \(type your answer\)|to select|Enter to confirm|(y\/n)|continue\?|allow\?|permit\?|approve\?/i, status: 'needs_input' },
-  { priority: 6, pattern: /^❯\s*/m, status: 'agent_ready' },
-  { priority: 7, pattern: /^›\s*/m, status: 'agent_ready' },
+  { priority: 5, pattern: /Asking user|Other \(type your answer\)|Select a session(?: to resume)?|to select|Enter to confirm|(y\/n)|continue\?|allow\?|permit\?|approve\?/i, status: 'needs_input' },
+  { priority: 6, pattern: /^❯\s*$/m, status: 'agent_ready' },
+  { priority: 7, pattern: /^›\s*$/m, status: 'agent_ready' },
   { priority: 8, pattern: /^Error:|^FATAL:|command not found$|ENOENT|CommandNotFoundException/m, status: 'failed' },
 ]
 
@@ -23,6 +23,8 @@ const RULES: DetectionRule[] = [
 // Copilot is actively animating. These can override needs_input because
 // they prove the agent is actually processing (not just stale text).
 const SPINNER_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⊙◐◑◒◓]/
+const IDLE_PROMPT_PATTERN = /^[❯›]\s*$/m
+const INTERACTIVE_PICKER_PATTERN = /Select a session(?: to resume)?|Enter to select|↑↓\s+to (?:navigate|select)/i
 
 /** Strip ANSI escape sequences from text for clean pattern matching. */
 function stripAnsi(text: string): string {
@@ -73,7 +75,7 @@ export class SystemB extends EventEmitter {
     // Diagnostic: log status-relevant matches to debug alt-screen issues
     if (process.env.TANGENT_STATUS_DEBUG) {
       const needsInputMatch = RULES[4].pattern.test(clean)
-      const promptMatch = /^[❯›]\s*/m.test(clean)
+      const promptMatch = IDLE_PROMPT_PATTERN.test(clean)
       const spinnerMatch = SPINNER_PATTERN.test(clean)
       if (needsInputMatch || spinnerMatch) {
         const snippet = clean.slice(0, 300).replace(/\n/g, '\\n')
@@ -186,11 +188,11 @@ export class SystemB extends EventEmitter {
 
       // needs_input is urgent — override hold timer to draw attention immediately
       // But respect cooldown after OSC cleared needs_input (stale TUI redraws)
-      // Also skip if the ❯ prompt is present — means the agent is idle and the
-      // needs_input text is historical (part of completed conversation)
+      // Also skip if a bare ❯ prompt is present — means the agent is idle and the
+      // needs_input text is historical, unless the current screen is a picker.
       if (rule.status === 'needs_input') {
         if (Date.now() < this.needsInputCooldownUntil) return
-        if (/^[❯›]\s*/m.test(clean)) return // Agent prompt visible → stale text
+        if (IDLE_PROMPT_PATTERN.test(clean) && !INTERACTIVE_PICKER_PATTERN.test(clean)) return // Agent prompt visible → stale text
         this.lastTransitionTime = 0 // Reset hold to force immediate transition
         this.tryTransition('needs_input')
         return

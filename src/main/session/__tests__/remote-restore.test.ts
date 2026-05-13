@@ -588,7 +588,7 @@ describe('Remote Session Restore', () => {
         if (s.kind === 'remote-agent') {
           // Skip if missing required fields
           if (!s.devBoxName || !s.devBoxProject) {
-            console.warn('[Tangent 2] Skipping remote session restore: missing Dev Box info', s.name)
+            console.warn('[Tangent] Skipping remote session restore: missing Dev Box info', s.name)
             continue
           }
 

@@ -64,6 +64,28 @@ export function registerWindowHandlers(windowManager: WindowManager): void {
     })
   })
 
+  ipcMain.handle('window:setCompactMode', (_, compactWidth: number) => {
+    try {
+      return windowManager.setCompactMode(compactWidth)
+    } catch (err) {
+      console.error('[Tangent] window:setCompactMode failed:', err)
+      return false
+    }
+  })
+
+  ipcMain.handle('window:restoreFromCompact', () => {
+    try {
+      return windowManager.restoreFromCompact()
+    } catch (err) {
+      console.error('[Tangent] window:restoreFromCompact failed:', err)
+      return false
+    }
+  })
+
+  ipcMain.handle('window:isInCompactMode', () => {
+    return windowManager.isInCompactMode()
+  })
+
   windowManager.on('popped-out', (sessionId: string) => {
     windowManager.broadcast('window:popped-out', sessionId)
   })

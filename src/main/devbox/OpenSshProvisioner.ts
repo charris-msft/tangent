@@ -13,7 +13,7 @@ export class OpenSshProvisioner {
     return new Promise((resolve, reject) => {
       sshClient.exec(command, (err: any, stream: any) => {
         if (err) {
-          console.warn('[Tangent 2] SSH exec error:', err.message)
+          console.warn('[Tangent] SSH exec error:', err.message)
           reject(err)
           return
         }
@@ -34,7 +34,7 @@ export class OpenSshProvisioner {
         })
 
         stream.on('error', (streamErr: any) => {
-          console.warn('[Tangent 2] SSH stream error:', streamErr.message)
+          console.warn('[Tangent] SSH stream error:', streamErr.message)
           reject(streamErr)
         })
       })
@@ -49,7 +49,7 @@ export class OpenSshProvisioner {
       )
 
       if (result.exitCode !== 0) {
-        console.warn('[Tangent 2] OpenSSH check failed with exit code:', result.exitCode)
+        console.warn('[Tangent] OpenSSH check failed with exit code:', result.exitCode)
         return false
       }
 
@@ -66,14 +66,14 @@ export class OpenSshProvisioner {
       )
 
       if (serviceResult.exitCode !== 0) {
-        console.warn('[Tangent 2] OpenSSH service check failed')
+        console.warn('[Tangent] OpenSSH service check failed')
         return false
       }
 
       const serviceStatus = serviceResult.stdout.trim()
       return serviceStatus === 'Running'
     } catch (err: any) {
-      console.warn('[Tangent 2] OpenSSH check error:', err.message)
+      console.warn('[Tangent] OpenSSH check error:', err.message)
       return false
     }
   }
@@ -86,13 +86,13 @@ export class OpenSshProvisioner {
       )
 
       if (result.exitCode !== 0) {
-        console.warn('[Tangent 2] OpenSSH installation failed:', result.stderr)
+        console.warn('[Tangent] OpenSSH installation failed:', result.stderr)
         return false
       }
 
       return true
     } catch (err: any) {
-      console.warn('[Tangent 2] OpenSSH installation error:', err.message)
+      console.warn('[Tangent] OpenSSH installation error:', err.message)
       return false
     }
   }
@@ -105,7 +105,7 @@ export class OpenSshProvisioner {
       )
 
       if (startResult.exitCode !== 0) {
-        console.warn('[Tangent 2] OpenSSH service start failed:', startResult.stderr)
+        console.warn('[Tangent] OpenSSH service start failed:', startResult.stderr)
         return false
       }
 
@@ -115,13 +115,13 @@ export class OpenSshProvisioner {
       )
 
       if (enableResult.exitCode !== 0) {
-        console.warn('[Tangent 2] OpenSSH service enable failed:', enableResult.stderr)
+        console.warn('[Tangent] OpenSSH service enable failed:', enableResult.stderr)
         return false
       }
 
       return true
     } catch (err: any) {
-      console.warn('[Tangent 2] OpenSSH enable error:', err.message)
+      console.warn('[Tangent] OpenSSH enable error:', err.message)
       return false
     }
   }
@@ -134,14 +134,14 @@ export class OpenSshProvisioner {
       )
 
       if (result.exitCode !== 0) {
-        console.warn('[Tangent 2] OpenSSH verify failed')
+        console.warn('[Tangent] OpenSSH verify failed')
         return false
       }
 
       const service = JSON.parse(result.stdout.trim())
       return service.Status === 4 && service.StartType === 2 // Status 4 = Running, StartType 2 = Automatic
     } catch (err: any) {
-      console.warn('[Tangent 2] OpenSSH verify error:', err.message)
+      console.warn('[Tangent] OpenSSH verify error:', err.message)
       return false
     }
   }

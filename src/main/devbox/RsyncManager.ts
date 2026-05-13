@@ -43,11 +43,11 @@ export interface SyncConflictEvent {
 
 /**
  * Orchestrates bidirectional rsync for workspace sync between local machine and Dev Box.
- * 
+ *
  * Local-as-primary model:
  * - syncOutbound: local → Dev Box (on connect)
  * - syncInbound: Dev Box → local (after agent turn)
- * 
+ *
  * Events:
  * - sync:started - { direction: 'outbound' | 'inbound', localPath, remotePath }
  * - sync:progress - { bytesTransferred, filesSynced, currentFile }
@@ -77,7 +77,7 @@ export class RsyncManager extends EventEmitter {
   ): Promise<RsyncResult> {
     const syncId = `outbound:${localPath}`
     if (this.activeSyncs.has(syncId)) {
-      console.warn('[Tangent 2] Sync already in progress for', localPath)
+      console.warn('[Tangent] Sync already in progress for', localPath)
       return { success: false, bytesTransferred: 0, filesSynced: 0, error: 'Sync in progress' }
     }
 
@@ -90,7 +90,7 @@ export class RsyncManager extends EventEmitter {
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      console.warn('[Tangent 2] Outbound sync failed:', err.message)
+      console.warn('[Tangent] Outbound sync failed:', err.message)
       this.emit('sync:error', { direction: 'outbound', error: err })
       return { success: false, bytesTransferred: 0, filesSynced: 0, error: err.message }
     } finally {
@@ -110,7 +110,7 @@ export class RsyncManager extends EventEmitter {
   ): Promise<RsyncResult> {
     const syncId = `inbound:${localPath}`
     if (this.activeSyncs.has(syncId)) {
-      console.warn('[Tangent 2] Sync already in progress for', localPath)
+      console.warn('[Tangent] Sync already in progress for', localPath)
       return { success: false, bytesTransferred: 0, filesSynced: 0, error: 'Sync in progress' }
     }
 
@@ -123,7 +123,7 @@ export class RsyncManager extends EventEmitter {
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      console.warn('[Tangent 2] Inbound sync failed:', err.message)
+      console.warn('[Tangent] Inbound sync failed:', err.message)
       this.emit('sync:error', { direction: 'inbound', error: err })
       return { success: false, bytesTransferred: 0, filesSynced: 0, error: err.message }
     } finally {
@@ -144,7 +144,7 @@ export class RsyncManager extends EventEmitter {
   ): Promise<RsyncResult> {
     const syncId = `inbound:${localPath}`
     if (this.activeSyncs.has(syncId)) {
-      console.warn('[Tangent 2] Sync already in progress for', localPath)
+      console.warn('[Tangent] Sync already in progress for', localPath)
       return { success: false, bytesTransferred: 0, filesSynced: 0, error: 'Sync in progress' }
     }
 
@@ -226,7 +226,7 @@ export class RsyncManager extends EventEmitter {
 
       return conflicts
     } catch (error) {
-      console.warn('[Tangent 2] Conflict detection failed:', error)
+      console.warn('[Tangent] Conflict detection failed:', error)
       return []
     }
   }
@@ -365,7 +365,7 @@ export class RsyncManager extends EventEmitter {
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      console.warn('[Tangent 2] Inbound sync with exclusions failed:', err.message)
+      console.warn('[Tangent] Inbound sync with exclusions failed:', err.message)
       this.emit('sync:error', { direction: 'inbound', error: err })
       return { success: false, bytesTransferred: 0, filesSynced: 0, error: err.message }
     } finally {
@@ -399,7 +399,7 @@ export class RsyncManager extends EventEmitter {
     }
 
     // Default to keep-local on timeout
-    console.warn('[Tangent 2] Conflict resolution timed out, defaulting to keep-local')
+    console.warn('[Tangent] Conflict resolution timed out, defaulting to keep-local')
     return 'keep-local'
   }
 
@@ -505,7 +505,7 @@ export class RsyncManager extends EventEmitter {
         }
       }
     } catch (error) {
-      console.warn('[Tangent 2] Failed to load sync config, using defaults:', error)
+      console.warn('[Tangent] Failed to load sync config, using defaults:', error)
       this.excludePatterns = []
     }
   }

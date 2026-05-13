@@ -15,7 +15,7 @@ export class AcpProvisioner {
     return new Promise((resolve, reject) => {
       sshClient.exec(command, (err: any, stream: any) => {
         if (err) {
-          console.warn('[Tangent 2] SSH exec error:', err.message)
+          console.warn('[Tangent] SSH exec error:', err.message)
           reject(err)
           return
         }
@@ -36,7 +36,7 @@ export class AcpProvisioner {
         })
 
         stream.on('error', (streamErr: any) => {
-          console.warn('[Tangent 2] SSH stream error:', streamErr.message)
+          console.warn('[Tangent] SSH stream error:', streamErr.message)
           reject(streamErr)
         })
       })
@@ -57,7 +57,7 @@ export class AcpProvisioner {
       const state = result.stdout.trim()
       return state === 'Ready' || state === 'Running'
     } catch (err: any) {
-      console.warn('[Tangent 2] ACP provisioning check error:', err.message)
+      console.warn('[Tangent] ACP provisioning check error:', err.message)
       return false
     }
   }
@@ -67,7 +67,7 @@ export class AcpProvisioner {
       if (!force) {
         const isProvisioned = await this.checkProvisioned(sshClient)
         if (isProvisioned) {
-          console.log('[Tangent 2] CopilotACP task already exists')
+          console.log('[Tangent] CopilotACP task already exists')
           return true
         }
       }
@@ -77,7 +77,7 @@ export class AcpProvisioner {
       const result = await this.execCommand(sshClient, command)
 
       if (result.exitCode !== 0) {
-        console.warn('[Tangent 2] ACP provisioning failed:', result.stderr)
+        console.warn('[Tangent] ACP provisioning failed:', result.stderr)
         return false
       }
 
@@ -87,13 +87,13 @@ export class AcpProvisioner {
       )
 
       if (startResult.exitCode !== 0) {
-        console.warn('[Tangent 2] ACP task start failed:', startResult.stderr)
+        console.warn('[Tangent] ACP task start failed:', startResult.stderr)
         return false
       }
 
       return true
     } catch (err: any) {
-      console.warn('[Tangent 2] ACP provisioning error:', err.message)
+      console.warn('[Tangent] ACP provisioning error:', err.message)
       return false
     }
   }
@@ -112,7 +112,7 @@ export class AcpProvisioner {
         if (result.exitCode === 0) {
           const canConnect = result.stdout.trim() === 'True'
           if (canConnect) {
-            console.log(`[Tangent 2] ACP service verified on port ${port}`)
+            console.log(`[Tangent] ACP service verified on port ${port}`)
             return true
           }
         }
@@ -122,10 +122,10 @@ export class AcpProvisioner {
         }
       }
 
-      console.warn(`[Tangent 2] ACP service verification failed after ${maxAttempts} attempts`)
+      console.warn(`[Tangent] ACP service verification failed after ${maxAttempts} attempts`)
       return false
     } catch (err: any) {
-      console.warn('[Tangent 2] ACP service verification error:', err.message)
+      console.warn('[Tangent] ACP service verification error:', err.message)
       return false
     }
   }

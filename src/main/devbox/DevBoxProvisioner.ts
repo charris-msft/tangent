@@ -53,7 +53,7 @@ export class DevBoxProvisioner extends EventEmitter {
     return new Promise((resolve, reject) => {
       sshClient.exec(command, (err: any, stream: any) => {
         if (err) {
-          console.warn('[Tangent 2] SSH exec error:', err.message)
+          console.warn('[Tangent] SSH exec error:', err.message)
           reject(err)
           return
         }
@@ -74,7 +74,7 @@ export class DevBoxProvisioner extends EventEmitter {
         })
 
         stream.on('error', (streamErr: any) => {
-          console.warn('[Tangent 2] SSH stream error:', streamErr.message)
+          console.warn('[Tangent] SSH stream error:', streamErr.message)
           reject(streamErr)
         })
       })
@@ -86,7 +86,7 @@ export class DevBoxProvisioner extends EventEmitter {
       const state = await this.loadState()
       return !!state.devBoxes[devBoxName]
     } catch (err: any) {
-      console.warn('[Tangent 2] Failed to check provisioning state:', err.message)
+      console.warn('[Tangent] Failed to check provisioning state:', err.message)
       return false
     }
   }
@@ -105,9 +105,9 @@ export class DevBoxProvisioner extends EventEmitter {
       }
 
       await this.saveState(state)
-      console.log('[Tangent 2] Marked Dev Box as provisioned:', devBoxName)
+      console.log('[Tangent] Marked Dev Box as provisioned:', devBoxName)
     } catch (err: any) {
-      console.warn('[Tangent 2] Failed to mark Dev Box as provisioned:', err.message)
+      console.warn('[Tangent] Failed to mark Dev Box as provisioned:', err.message)
     }
   }
 
@@ -143,7 +143,7 @@ export class DevBoxProvisioner extends EventEmitter {
 
       const timeout = setTimeout(() => {
         this.removeListener('provision:consent-response', onConsentResponse)
-        console.warn('[Tangent 2] Provisioning consent timeout for Dev Box:', devBoxName)
+        console.warn('[Tangent] Provisioning consent timeout for Dev Box:', devBoxName)
         resolve(false)
       }, timeoutMs)
 
@@ -163,13 +163,13 @@ export class DevBoxProvisioner extends EventEmitter {
       const result = await this.execCommand(sshClient, command)
 
       if (result.exitCode !== 0) {
-        console.warn('[Tangent 2] Session sync configuration failed:', result.stderr)
+        console.warn('[Tangent] Session sync configuration failed:', result.stderr)
         return false
       }
 
       return true
     } catch (err: any) {
-      console.warn('[Tangent 2] Session sync configuration error:', err.message)
+      console.warn('[Tangent] Session sync configuration error:', err.message)
       return false
     }
   }
@@ -181,7 +181,7 @@ export class DevBoxProvisioner extends EventEmitter {
       const createDirResult = await this.execCommand(sshClient, createDirCommand)
 
       if (createDirResult.exitCode !== 0) {
-        console.warn('[Tangent 2] Failed to create .github/hooks directory:', createDirResult.stderr)
+        console.warn('[Tangent] Failed to create .github/hooks directory:', createDirResult.stderr)
         return false
       }
 
@@ -197,7 +197,7 @@ export class DevBoxProvisioner extends EventEmitter {
       const copySyncJsonResult = await this.execCommand(sshClient, copySyncJsonCommand)
 
       if (copySyncJsonResult.exitCode !== 0) {
-        console.warn('[Tangent 2] Failed to copy sync.json:', copySyncJsonResult.stderr)
+        console.warn('[Tangent] Failed to copy sync.json:', copySyncJsonResult.stderr)
         return false
       }
 
@@ -207,7 +207,7 @@ export class DevBoxProvisioner extends EventEmitter {
       const copySyncScriptResult = await this.execCommand(sshClient, copySyncScriptCommand)
 
       if (copySyncScriptResult.exitCode !== 0) {
-        console.warn('[Tangent 2] Failed to copy sync-workspace-to-primary.ps1:', copySyncScriptResult.stderr)
+        console.warn('[Tangent] Failed to copy sync-workspace-to-primary.ps1:', copySyncScriptResult.stderr)
         return false
       }
 
@@ -217,7 +217,7 @@ export class DevBoxProvisioner extends EventEmitter {
       const copyFullSyncScriptResult = await this.execCommand(sshClient, copyFullSyncScriptCommand)
 
       if (copyFullSyncScriptResult.exitCode !== 0) {
-        console.warn('[Tangent 2] Failed to copy full-workspace-sync.ps1:', copyFullSyncScriptResult.stderr)
+        console.warn('[Tangent] Failed to copy full-workspace-sync.ps1:', copyFullSyncScriptResult.stderr)
         return false
       }
 
@@ -227,26 +227,26 @@ export class DevBoxProvisioner extends EventEmitter {
       const verifyResult = await this.execCommand(sshClient, verifyCommand)
 
       if (verifyResult.stdout.trim() !== 'True') {
-        console.warn('[Tangent 2] Verification failed - not all hook files deployed')
+        console.warn('[Tangent] Verification failed - not all hook files deployed')
         return false
       }
 
-      console.log('[Tangent 2] Successfully deployed sync hooks to workspace:', workspacePath)
+      console.log('[Tangent] Successfully deployed sync hooks to workspace:', workspacePath)
       return true
     } catch (err: any) {
-      console.warn('[Tangent 2] Failed to deploy sync hooks:', err.message)
+      console.warn('[Tangent] Failed to deploy sync hooks:', err.message)
       return false
     }
   }
 
   async provision(sshClient: Client, devBoxName: string, workspacePath?: string): Promise<boolean> {
     try {
-      console.log('[Tangent 2] Starting provisioning for Dev Box:', devBoxName)
+      console.log('[Tangent] Starting provisioning for Dev Box:', devBoxName)
 
       // Step 1: Check if already provisioned
       const alreadyProvisioned = await this.isProvisioned(devBoxName)
       if (alreadyProvisioned) {
-        console.log('[Tangent 2] Dev Box already provisioned:', devBoxName)
+        console.log('[Tangent] Dev Box already provisioned:', devBoxName)
         this.emit('provision:complete', { devBoxName, skipped: true })
         return true
       }
@@ -308,19 +308,19 @@ export class DevBoxProvisioner extends EventEmitter {
 
       // Step 6: Deploy sync hook scripts
       this.emitStep('deploy-sync-hooks', 'in-progress')
-      
+
       if (workspacePath) {
         const hooksDeployed = await this.deploySyncHooks(sshClient, workspacePath)
-        
+
         if (!hooksDeployed) {
           this.emitStep('deploy-sync-hooks', 'failed', 'Failed to deploy sync hooks')
           this.emit('provision:failed', { devBoxName, reason: 'sync-hooks-failed' })
           return false
         }
       } else {
-        console.log('[Tangent 2] No workspace path provided - skipping sync hooks deployment')
+        console.log('[Tangent] No workspace path provided - skipping sync hooks deployment')
       }
-      
+
       this.emitStep('deploy-sync-hooks', 'complete')
 
       // Step 7: Mark as provisioned
@@ -328,12 +328,12 @@ export class DevBoxProvisioner extends EventEmitter {
       await this.markProvisioned(devBoxName, changes)
       this.emitStep('save-state', 'complete')
 
-      console.log('[Tangent 2] Provisioning complete for Dev Box:', devBoxName)
+      console.log('[Tangent] Provisioning complete for Dev Box:', devBoxName)
       this.emit('provision:complete', { devBoxName, skipped: false })
 
       return true
     } catch (err: any) {
-      console.warn('[Tangent 2] Provisioning error for Dev Box:', devBoxName, err.message)
+      console.warn('[Tangent] Provisioning error for Dev Box:', devBoxName, err.message)
       this.emit('provision:failed', { devBoxName, reason: 'unexpected-error', error: err.message })
       return false
     }

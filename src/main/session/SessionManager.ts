@@ -3,6 +3,7 @@ import path from 'path'
 import { SessionStore } from './SessionStore'
 import { SdkSessionManager } from './SdkSessionManager'
 import { ContextStore } from './ContextStore'
+import { TaskTimelineStore } from './TaskTimelineStore'
 import { PtyManager } from '../pty/PtyManager'
 import { StatusEngine } from '../status/StatusEngine'
 import { ExternalScanner } from './ExternalScanner'
@@ -14,6 +15,7 @@ export class SessionManager {
   private externalScanner = new ExternalScanner()
   private _sdkManager: SdkSessionManager | null = null
   private _contextStore: ContextStore | null = null
+  private _timelineStore: TaskTimelineStore | null = null
 
   constructor(
     private store: SessionStore,
@@ -25,6 +27,11 @@ export class SessionManager {
       if (session) {
         const engine = this.engines.get(session.id)
         engine?.feed(data)
+
+        // Append output to timeline store for non-shell sessions
+        if (this._timelineStore && session.agentType !== 'shell') {
+          this._timelineStore.appendOutput(session.id, data)
+        }
       }
     })
 
@@ -36,7 +43,39 @@ export class SessionManager {
         engine?.handlePtyExit(exitCode)
       }
     })
+
+    // Wire status transitions for timeline completion
+    this.store.on('updated', (session: Session) => {
+      const prevStatus = this.statusHistory.get(session.id)
+
+      // Track status changes for timeline completion logic
+      if (prevStatus !== session.status) {
+        // Complete timeline item when transitioning from processing/tool_executing/needs_input to agent_ready
+        if (
+          this._timelineStore &&
+          session.agentType !== 'shell' &&
+          (prevStatus === 'processing' || prevStatus === 'tool_executing' || prevStatus === 'needs_input') &&
+          session.status === 'agent_ready'
+        ) {
+          this._timelineStore.completeLatest(session.id, 'success')
+        }
+
+        // Mark as error/interrupted on failed/exited
+        if (this._timelineStore && session.agentType !== 'shell') {
+          if (session.status === 'failed') {
+            this._timelineStore.failInProgress(session.id, 'Task failed')
+          } else if (session.status === 'exited') {
+            this._timelineStore.failInProgress(session.id, 'Session exited')
+          }
+        }
+
+        // Update status history
+        this.statusHistory.set(session.id, session.status)
+      }
+    })
   }
+
+  private statusHistory = new Map<string, string>() // sessionId -> previous status
 
   setContextStore(contextStore: ContextStore): void {
     this._contextStore = contextStore
@@ -44,6 +83,14 @@ export class SessionManager {
 
   get contextStore(): ContextStore | null {
     return this._contextStore
+  }
+
+  setTimelineStore(timelineStore: TaskTimelineStore): void {
+    this._timelineStore = timelineStore
+  }
+
+  get timelineStore(): TaskTimelineStore | null {
+    return this._timelineStore
   }
 
   setSdkManager(sdkManager: SdkSessionManager): void {

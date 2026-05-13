@@ -26,6 +26,9 @@ const DEFAULT_POPOUT_HEIGHT = 600
 export class WindowManager extends EventEmitter {
   private mainWindow: BrowserWindow | null = null
   private popouts: Map<string, BrowserWindow> = new Map()
+  private savedBounds: { x: number; y: number; width: number; height: number } | null = null
+  private savedMinSize: { width: number; height: number } | null = null
+  private isCompactMode = false
 
   setMainWindow(win: BrowserWindow): void {
     this.mainWindow = win
@@ -136,7 +139,7 @@ export class WindowManager extends EventEmitter {
     const iconPath = join(__dirname, '../../assets/tangent.ico')
 
     const win = new BrowserWindow({
-      title: 'Tangent 2',
+      title: 'Tangent',
       x: bounds?.x,
       y: bounds?.y,
       width: bounds?.width ?? DEFAULT_POPOUT_WIDTH,
@@ -292,5 +295,125 @@ export class WindowManager extends EventEmitter {
     } catch (err) {
       console.error('[WindowManager] sendToMain failed:', err)
     }
+  }
+
+  /**
+   * Compact the main window to a narrow width (sessions pane + agents pane only).
+   * Saves current bounds and minimum size for later restoration.
+   * If window is maximized, unmaximizes it first.
+   *
+   * @param compactWidth - Target width for compact mode (e.g., 400px)
+   * @returns true if successful, false otherwise
+   */
+  setCompactMode(compactWidth: number): boolean {
+    const main = this.getMainWindow()
+    if (!main || main.isDestroyed()) {
+      console.error('[WindowManager] Cannot compact: main window unavailable')
+      return false
+    }
+
+    try {
+      // Already compact — no-op
+      if (this.isCompactMode) {
+        console.log('[WindowManager] Already in compact mode')
+        return true
+      }
+
+      // Save current state before compacting
+      const wasMaximized = main.isMaximized()
+      if (wasMaximized) {
+        main.unmaximize()
+      }
+
+      const currentBounds = main.getBounds()
+      const currentMinSize = main.getMinimumSize()
+
+      this.savedBounds = {
+        x: currentBounds.x,
+        y: currentBounds.y,
+        width: currentBounds.width,
+        height: currentBounds.height
+      }
+      this.savedMinSize = {
+        width: currentMinSize[0],
+        height: currentMinSize[1]
+      }
+
+      // Lower min width to allow narrow compact mode
+      const compactMinWidth = Math.min(200, compactWidth)
+      main.setMinimumSize(compactMinWidth, currentMinSize[1])
+
+      // Resize to compact width, keeping height and position
+      main.setBounds({
+        x: currentBounds.x,
+        y: currentBounds.y,
+        width: compactWidth,
+        height: currentBounds.height
+      })
+
+      this.isCompactMode = true
+      console.log(`[WindowManager] Compacted to ${compactWidth}px (saved bounds: ${this.savedBounds.width}x${this.savedBounds.height})`)
+      return true
+    } catch (err) {
+      console.error('[WindowManager] Failed to set compact mode:', err)
+      return false
+    }
+  }
+
+  /**
+   * Restore the main window from compact mode to its previous bounds and minimum size.
+   * If no saved bounds exist (never compacted), this is a no-op.
+   *
+   * @returns true if successful, false otherwise
+   */
+  restoreFromCompact(): boolean {
+    const main = this.getMainWindow()
+    if (!main || main.isDestroyed()) {
+      console.error('[WindowManager] Cannot restore: main window unavailable')
+      return false
+    }
+
+    try {
+      // Not in compact mode — no-op
+      if (!this.isCompactMode) {
+        console.log('[WindowManager] Not in compact mode, nothing to restore')
+        return true
+      }
+
+      // No saved bounds — should not happen, but guard anyway
+      if (!this.savedBounds || !this.savedMinSize) {
+        console.error('[WindowManager] No saved bounds to restore')
+        return false
+      }
+
+      // Restore minimum size first so setBounds doesn't get clamped
+      main.setMinimumSize(this.savedMinSize.width, this.savedMinSize.height)
+
+      // Restore previous bounds
+      main.setBounds({
+        x: this.savedBounds.x,
+        y: this.savedBounds.y,
+        width: this.savedBounds.width,
+        height: this.savedBounds.height
+      })
+
+      this.isCompactMode = false
+      console.log(`[WindowManager] Restored from compact mode to ${this.savedBounds.width}x${this.savedBounds.height}`)
+
+      // Clear saved state
+      this.savedBounds = null
+      this.savedMinSize = null
+      return true
+    } catch (err) {
+      console.error('[WindowManager] Failed to restore from compact mode:', err)
+      return false
+    }
+  }
+
+  /**
+   * Check if the main window is currently in compact mode.
+   */
+  isInCompactMode(): boolean {
+    return this.isCompactMode
   }
 }

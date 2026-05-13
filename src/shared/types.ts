@@ -142,6 +142,16 @@ export interface AgentStoreData {
   groups: ProjectFolder[]
 }
 
+// === Agent Launch Result ===
+
+export interface AgentLaunchResult {
+  launched: boolean
+  sessionId?: string
+  agentId?: string
+  agentName?: string
+  error?: string
+}
+
 // === Tool Use Tracking ===
 
 export type ToolUseKind = 'tool' | 'skill' | 'subagent'
@@ -195,6 +205,31 @@ export interface HumanContext {
     lastActiveAgo: number
     metrics?: SessionMetrics
   }
+}
+
+// === Task Timeline (Prompt/Response tracking) ===
+
+export type TaskOutcome = 'in-progress' | 'success' | 'partial' | 'error' | 'interrupted'
+export type TaskTimelineSource = 'terminal' | 'sdk'
+
+export interface TaskTimelineItem {
+  id: string
+  sessionId: string
+  promptText: string
+  promptTimestamp: number
+  source: TaskTimelineSource
+  agentType: AgentType
+  status: TaskOutcome
+  startedAt: number
+  completedAt?: number
+  responseSummary?: string
+  fullResponse?: string
+  terminalStartLine?: number
+  terminalEndLine?: number
+  toolsUsed: string[]
+  errorMessage?: string
+  tokensUsed?: number
+  interrupted: boolean
 }
 
 // === Status File (System A) ===

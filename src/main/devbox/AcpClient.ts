@@ -37,7 +37,7 @@ export class AcpClient extends EventEmitter {
    */
   async connect(options: AcpConnectionOptions): Promise<void> {
     if (this.connection) {
-      console.warn('[Tangent 2] AcpClient: Already connected')
+      console.warn('[Tangent] AcpClient: Already connected')
       return
     }
 
@@ -86,7 +86,7 @@ export class AcpClient extends EventEmitter {
     } catch (err) {
       this.state = 'failed'
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Connection failed:', error.message)
+      console.warn('[Tangent] AcpClient: Connection failed:', error.message)
       this.emit('acp:error', error)
       throw error
     }
@@ -97,7 +97,7 @@ export class AcpClient extends EventEmitter {
    */
   async connectWithStream(stream: Stream): Promise<void> {
     if (this.connection) {
-      console.warn('[Tangent 2] AcpClient: Already connected')
+      console.warn('[Tangent] AcpClient: Already connected')
       return
     }
 
@@ -148,7 +148,7 @@ export class AcpClient extends EventEmitter {
             if (this.connection === conn) {
               this.state = 'failed'
               const error = err instanceof Error ? err : new Error(String(err))
-              console.warn('[Tangent 2] AcpClient: Connection closed with error:', error.message)
+              console.warn('[Tangent] AcpClient: Connection closed with error:', error.message)
               this.emit('acp:error', error)
               this.connection = null
             }
@@ -158,9 +158,9 @@ export class AcpClient extends EventEmitter {
       this.state = 'failed'
       const error = err instanceof Error ? err : new Error(String(err))
       // Log full error details for debugging ACP protocol issues
-      console.warn('[Tangent 2] AcpClient: Connection failed:', error.message)
+      console.warn('[Tangent] AcpClient: Connection failed:', error.message)
       if (err && typeof err === 'object' && 'code' in err) {
-        console.warn('[Tangent 2] AcpClient: Error code:', (err as any).code, 'data:', JSON.stringify((err as any).data))
+        console.warn('[Tangent] AcpClient: Error code:', (err as any).code, 'data:', JSON.stringify((err as any).data))
       }
       this.emit('acp:error', error)
       throw error
@@ -177,7 +177,7 @@ export class AcpClient extends EventEmitter {
     }
 
     try {
-      console.log('[Tangent 2] AcpClient: Sending session/new with cwd:', config.cwd)
+      console.log('[Tangent] AcpClient: Sending session/new with cwd:', config.cwd)
       const response = await this.connection.newSession({
         cwd: config.cwd,
         mcpServers: config.mcpServers ?? [],
@@ -205,9 +205,9 @@ export class AcpClient extends EventEmitter {
       return session
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Failed to create session:', error.message)
+      console.warn('[Tangent] AcpClient: Failed to create session:', error.message)
       if (err && typeof err === 'object' && 'code' in err) {
-        console.warn('[Tangent 2] AcpClient: Session error code:', (err as any).code, 'data:', JSON.stringify((err as any).data))
+        console.warn('[Tangent] AcpClient: Session error code:', (err as any).code, 'data:', JSON.stringify((err as any).data))
       }
       this.emit('acp:error', error)
       throw error
@@ -228,7 +228,7 @@ export class AcpClient extends EventEmitter {
       // Try unstable_resumeSession first (no history replay)
       if (this.connection.unstable_resumeSession) {
         const response = await this.connection.unstable_resumeSession({ sessionId })
-        
+
         // Check if we already have this session mapped
         let tangentSessionId = this.acpToTangentSessionMap.get(sessionId)
         if (!tangentSessionId) {
@@ -251,7 +251,7 @@ export class AcpClient extends EventEmitter {
       } else if (this.connection.loadSession) {
         // Fall back to loadSession which replays history
         const response = await this.connection.loadSession({ sessionId })
-        
+
         let tangentSessionId = this.acpToTangentSessionMap.get(sessionId)
         if (!tangentSessionId) {
           tangentSessionId = sessionId
@@ -274,7 +274,7 @@ export class AcpClient extends EventEmitter {
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Failed to resume session:', error.message)
+      console.warn('[Tangent] AcpClient: Failed to resume session:', error.message)
       this.emit('acp:error', error)
       throw error
     }
@@ -289,7 +289,7 @@ export class AcpClient extends EventEmitter {
       throw new Error('No previous connection options — cannot reconnect')
     }
 
-    console.log('[Tangent 2] AcpClient: Reconnecting...')
+    console.log('[Tangent] AcpClient: Reconnecting...')
 
     // Tear down old connection
     await this.disconnect()
@@ -308,16 +308,16 @@ export class AcpClient extends EventEmitter {
       const config = this.lastSessionConfigs.get(tangentSessionId)
       if (config) {
         try {
-          console.log(`[Tangent 2] AcpClient: Re-creating session for ${tangentSessionId}`)
+          console.log(`[Tangent] AcpClient: Re-creating session for ${tangentSessionId}`)
           await this.newSession(config)
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
-          console.warn(`[Tangent 2] AcpClient: Failed to re-create session ${tangentSessionId}:`, msg)
+          console.warn(`[Tangent] AcpClient: Failed to re-create session ${tangentSessionId}:`, msg)
         }
       }
     }
 
-    console.log('[Tangent 2] AcpClient: Reconnection complete')
+    console.log('[Tangent] AcpClient: Reconnection complete')
   }
 
   /**
@@ -354,7 +354,7 @@ export class AcpClient extends EventEmitter {
       // Log full error details including JSON-RPC code
       const code = (err as any)?.code
       const data = (err as any)?.data
-      console.warn('[Tangent 2] AcpClient: Prompt failed:', error.message,
+      console.warn('[Tangent] AcpClient: Prompt failed:', error.message,
         code ? `(code: ${code})` : '',
         data ? `data: ${JSON.stringify(data)}` : '',
         '— attempting reconnect')
@@ -363,10 +363,10 @@ export class AcpClient extends EventEmitter {
       try {
         await this.reconnect()
         await doSend()
-        console.log('[Tangent 2] AcpClient: Prompt succeeded after reconnect')
+        console.log('[Tangent] AcpClient: Prompt succeeded after reconnect')
       } catch (retryErr) {
         const retryError = retryErr instanceof Error ? retryErr : new Error(String(retryErr))
-        console.warn('[Tangent 2] AcpClient: Prompt failed after reconnect:', retryError.message)
+        console.warn('[Tangent] AcpClient: Prompt failed after reconnect:', retryError.message)
         this.emit('acp:error', retryError)
         throw retryError
       }
@@ -399,7 +399,7 @@ export class AcpClient extends EventEmitter {
       this.acpToTangentSessionMap.delete(acpSessionId)
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Failed to close session:', error.message)
+      console.warn('[Tangent] AcpClient: Failed to close session:', error.message)
       this.emit('acp:error', error)
       throw error
     }
@@ -425,7 +425,7 @@ export class AcpClient extends EventEmitter {
       this.emit('acp:disconnected')
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      console.warn('[Tangent 2] AcpClient: Error during disconnect:', error.message)
+      console.warn('[Tangent] AcpClient: Error during disconnect:', error.message)
       this.connection = null
       this.state = 'disconnected'
     }
@@ -498,12 +498,12 @@ export class AcpClient extends EventEmitter {
   private async handleSessionUpdate(notification: schema.SessionNotification): Promise<void> {
     const tangentSessionId = this.acpToTangentSessionMap.get(notification.sessionId)
     if (!tangentSessionId) {
-      console.warn('[Tangent 2] AcpClient: Received update for unknown session:', notification.sessionId)
+      console.warn('[Tangent] AcpClient: Received update for unknown session:', notification.sessionId)
       return
     }
 
     const updateType = (notification.update as any)?.sessionUpdate || 'unknown'
-    console.log(`[Tangent 2] AcpClient: Session update type="${updateType}" for ${tangentSessionId}`)
+    console.log(`[Tangent] AcpClient: Session update type="${updateType}" for ${tangentSessionId}`)
 
     // Convert ACP notification to Tangent response format
     const response: AcpAgentResponse = {
