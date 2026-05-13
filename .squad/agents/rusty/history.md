@@ -8,6 +8,48 @@
 
 ## Learnings
 
+### 2026-05-06: Window Compact/Restore Mode
+
+**Session:** window-compact-mode (2026-05-06)
+
+**Problem Solved:** Compact mode in renderer hid terminal content but left BrowserWindow full-width. Users expected window to physically collapse to sessions+agents pane width, then restore when selecting a session.
+
+**Solution Delivered:**
+- Added `WindowManager.setCompactMode(compactWidth)` — saves bounds/minSize, unmaximizes if needed, resizes window
+- Added `WindowManager.restoreFromCompact()` — restores saved bounds and minSize
+- Added `WindowManager.isInCompactMode()` — query current state
+- Registered IPC handlers: `window:setCompactMode`, `window:restoreFromCompact`, `window:isInCompactMode`
+- Exposed API via preload: `tangentAPI.window.setCompactMode()`, `restoreFromCompact()`, `isInCompactMode()`
+
+**Key Design:**
+- Saved state: `savedBounds`, `savedMinSize`, `isCompactMode` flag
+- Handles maximized windows: unmaximizes before compacting, stores restorable bounds
+- Lowers minimum width during compact (down to 200px) so Electron doesn't silently enlarge
+- Restores min size before expanding to avoid clamping
+- No-op when already in target mode
+- Preserves existing Explode/setMainBounds behavior
+
+**Files Changed:** `src/main/window/WindowManager.ts`, `src/main/ipc/windowHandlers.ts`, `src/preload/index.ts`
+
+**Outcome:** Renderer can now call `tangentAPI.window.setCompactMode(400)` and `restoreFromCompact()` to physically resize the main BrowserWindow. Default expanded view preserved on startup.
+
+### 2026-05-05: Session Waiting Color Fix — Status Detection Outcome
+
+**Session:** session-waiting-color-fix (2026-05-05T23:22:13Z)
+
+**Problem Solved:** Copilot resume-session pickers rendered with `❯` marker were incorrectly detected as agent-ready (idle prompt) instead of needs_input, preventing the Sessions panel from showing the correct waiting visual state.
+
+**Solution Delivered:** Updated SystemB detection in `src/main/status/system-b.ts` to distinguish:
+- Bare idle prompt (`❯` or `›` alone) → `shell_ready`
+- Interactive picker (picker glyph + selectable rows) → `needs_input`
+
+**Outcome:** SystemB unit tests pass. Regression suite validated. Integrated by Coordinator.
+
+### 2026-05-05: Copilot picker status detection
+
+- Copilot resume/session pickers render selected rows with `❯`, the same glyph as the idle prompt.
+- Status detection must treat only a bare `❯`/`›` line as idle; `❯` followed by selectable content is an interactive picker and should remain `needs_input`.
+
 ### 2026-04-13: SshTunnelManager Implementation (P1.8 + P1.9)
 
 Created `src/main/devbox/SshTunnelManager.ts` for managing SSH tunnel lifecycle to Dev Box connections:

@@ -8,7 +8,79 @@
 
 ## Learnings
 
-<!-- Append learnings below -->
+### 2026-05-12: Terminal/Rail Layout Regression Pattern
+
+**Session:** terminal-wrap-agent-rail-regression (2026-05-12T23:00:00Z)
+
+**Problem Solved:** User reported xterm text wrapping/render fragments into the narrow area under or behind the right AgentsSidebar rail.
+
+**Regression Pattern:** For terminal layout bugs, assert bounding boxes for the visible contract rather than screenshots:
+- Anchor the terminal area with `data-testid="terminal-column"`.
+- Anchor the always-visible right rail from the accessible "Add project" button and its rail ancestor.
+- Force a long terminal line, then assert `.xterm`, `.xterm-screen`, `.xterm-rows`, and `.xterm-viewport` stay within the terminal column and end before the rail.
+- Check both edge containment and overlap so width expansion and sidebar underlap fail deterministically.
+
+**Outcome:** Rewrote `tests/regression/specific.spec.ts` for the latest xterm/AgentsSidebar layout fix. Targeted Playwright regression passed.
+
+### 2026-05-06: Keyboard Quick-Launch Auto-Expand Coverage Decision
+
+**Session:** compact-mode-keyboard-quicklaunch (2026-05-06T11:52:00Z)
+
+**Problem Analyzed:** After Livingston fixes the keyboard quick-launch restore path (Ctrl+Shift+1-9 to launch agents while in compact mode), Coordinator requested regression coverage if practical.
+
+**Technical Analysis:**
+- Keyboard quick-launch (Ctrl+Shift+1-9) calls `launchAgentByIndex()` → `launchAgent()` in `AgentStore`
+- The fix would add compact-mode awareness to the launch path (similar to session-click auto-expand)
+- E2E test would require:
+  1. Agents pre-configured in test environment (AgentStore reads from disk via `tangentAPI.agents.list()`)
+  2. Knowing which agent index maps to which key (brittle, environment-dependent)
+  3. Predictable agent profiles in the sidebar (external dependency, not controlled by test)
+
+**Solution Delivered:** Documented limitation with explicit NOTE comment in `tests/regression/specific.spec.ts`:
+```typescript
+// NOTE: Keyboard quick-launch (Ctrl+Shift+1-9) auto-expand is NOT tested here.
+// Testing it would require:
+//   1. Agents pre-configured in the test environment (AgentStore reads from disk)
+//   2. Knowing which agent index maps to which session/key (brittle)
+//   3. Predictable agent launch state (external dependency)
+// The session-click path above validates the core BrowserWindow expand/collapse
+// behavior. The keyboard shortcut path is covered by manual testing.
+```
+
+**Outcome:** Kept existing session-click BrowserWindow regression (test passes). Keyboard quick-launch auto-expand will be validated through manual testing due to agent configuration brittleness in E2E environment.
+
+**Regression Suite Status:** All tests pass (general=5 passed, specific=1 passed).
+
+### 2026-05-06: Compact Mode BrowserWindow Regression
+
+**Session:** compact-mode-window-resize (2026-05-06T00:00:00Z)
+
+**Problem Solved:** User reported compact mode only hides terminal DOM content but doesn't resize the actual Electron BrowserWindow. Existing regression only checked terminal column width, missing the window-level behavior.
+
+**Solution Delivered:** Strengthened `tests/regression/specific.spec.ts` to verify BrowserWindow resizing:
+- Added `app.evaluate(({ BrowserWindow }) => ...)` calls to read window bounds before/during/after compact mode
+- Assert window width reduces by >400px when entering compact mode (measured: ~896px reduction)
+- Assert compact window stays below 600px wide
+- Assert window expands by >400px when auto-exiting compact mode
+- Verified implementation was already in place and working correctly
+
+**Outcome:** Full regression suite passes (6/6). Test now catches both DOM-only and window-resize regressions. Implementation confirmed functional with 1201px → 305px → 1202px width transitions.
+
+**Key Technique:** Used Playwright Electron `app.evaluate()` API to access main process BrowserWindow.getAllWindows()[0].getBounds() for window-level assertions, complementing existing DOM boundingBox checks.
+
+### 2026-05-05: Session Waiting Color Fix — Test Instrumentation Outcome
+
+**Session:** session-waiting-color-fix (2026-05-05T23:22:13Z)
+
+**Problem Solved:** Session panel waiting color regression required deterministic automation. Real Copilot launch/resume scenarios are slow/flaky; no stable test hooks existed for asserting visual state on selected rows.
+
+**Solution Delivered:** Test instrumentation for visual regression coverage:
+- Exposed session row test identifiers via `data-test-*` attributes
+- Implemented `tangentAPI.test.setSessionState()` helper (NODE_ENV=test only)
+- Rewrote `tests/regression/specific.spec.ts` with selected-waiting scenario
+- Assert visible waiting color (dot, bar, background, glow) on active Copilot row
+
+**Outcome:** Focused Playwright test passes. Regression suite green. Ready for Coordinator merge.
 
 ### 2026-04-13 — Anticipatory Test Scaffolding for Remote Execution Managers
 
@@ -27,13 +99,13 @@ Created comprehensive test scaffolds for all three managers based on type defini
   - getConnectionInfo: connection details, missing boxes
   - checkHealth: SSH reachability, health status
   - autoStart: polling, timeout, already-running optimization
-  
+
 - `src/main/devbox/__tests__/SshTunnelManager.test.ts` (390 LOC)
   - createTunnel/closeTunnel: success, auth failures, already-closed
   - getTunnelStatus: connected/disconnected/reconnecting states
   - Health monitoring: error detection, event emission
   - Auto-reconnect: exponential backoff (1s, 2s, 4s, 8s, max 30s), max retry exhaustion
-  
+
 - `src/main/devbox/__tests__/AcpClient.test.ts` (450 LOC)
   - connect/disconnect: success, ECONNREFUSED, auth failures
   - createSession/sendPrompt: session lifecycle, invalid config
@@ -47,6 +119,18 @@ Created comprehensive test scaffolds for all three managers based on type defini
 - EventEmitter pattern for manager events
 - Fake timers for async delays (polling, backoff)
 - Table-driven tests where appropriate (not used here, but considered)
+
+### 2026-04-13 — Validation Script False Alarm
+
+**Context:** Copilot reported PowerShell syntax errors in `.squad/scripts/validate-squad-process.ps1`:
+- "The Try statement is missing its Catch or Finally block" at line 133
+- "Missing closing '}' for the `if (Test-Path $hookReportPath)` block around line 115"
+
+**What I did:**
+Ran the validation script from the repo root. It executed successfully with exit code 0, all 6 structural checks passed (team.md, routing.md, ceremonies.md, .gitattributes union rules, hook report parsing, packaged exe check). No PowerShell parse errors were encountered.
+
+**Outcome:**
+The script is syntactically correct and functionally sound. The reported errors may have been from an earlier transient state or a different file version. No changes needed.
 
 ### 2026-04-13 — ACP Integration Tests (P2.11)
 
@@ -283,4 +367,165 @@ When Explode runs with the exclusion-rect approach:
 - Always capture ALL windows in overlap assertion, not filtered subset (lesson from prior bug: assertion on popout-only subset missed overlap with main)
 - Verify exclusion rect is correctly computed from main's actual bounds (common bug: stale/default bounds instead of current position)
 - Test with Brady's multi-monitor setup: verify tiles respect display.workArea (excludes taskbar)
+
+### 2026-05-06: StatusBar Label Removal Regression
+
+**Session:** statusbar-label-cleanup (2026-05-06T14:06:42Z)
+
+**Problem Solved:** After removing the agent type label display from the status bar (e.g., "Copilot CLI", "Shell", "Claude Code"), needed targeted regression test to prevent reintroduction.
+
+**Solution Delivered:** Updated `tests/regression/specific.spec.ts` with precise DOM selector strategy:
+- Used `button[title="Settings"]` as anchor to locate status bar via XPath ancestor traversal
+- Selected only the center section div (`.flex.items-center.gap-2.min-w-0.flex-shrink`) to avoid false positives from session panel or terminal content
+- Verified forbidden labels ('Copilot CLI', 'Claude Code', 'Shell', 'No Session') do not appear in that specific region
+- Maintained sanity check that 'Ctrl+B panels' still renders
+
+**Initial Test Failure:** First attempt used `.filter({ hasText: /Ctrl\+B panels/i })` which captured entire page content including session rows and terminal output, causing false positives when "Shell" appeared elsewhere in the UI.
+
+**Key Technique:** When testing status bar elements, use structural selectors (class combinations, aria attributes, XPath ancestors) rather than text-based filters to avoid capturing unrelated UI regions with similar text.
+
+**Outcome:** Full regression suite passes (6/6). Test now specifically validates the status bar center section isolation, not global page text.
+
+### 2026-05-05 — Squad V2 Validation Guardrails
+
+**Context:** Tangent Squad is upgrading from V1 to V2. Need validation guardrails for structural compliance that are safe on dirty worktree and don't run expensive builds/tests.
+
+**What I did:**
+Created three artifacts to support Squad V2 upgrade:
+
+1. **Verified .gitattributes union merge rules** (already present):
+   - `.squad/decisions.md merge=union`
+   - `.squad/agents/*/history.md merge=union`
+   - `.squad/log/** merge=union`
+   - `.squad/orchestration-log/** merge=union`
+
+2. **Created .squad/scripts/validate-squad-process.ps1** — Non-destructive validation script with 6 checks:
+   - `.squad/team.md` has `## Members` and `## Model Policy`
+   - `.squad/routing.md` mentions Response Mode Selection and Squad-First Reflex
+   - `.squad/ceremonies.md` mentions Per-Task Gate and Packaging Smoke Gate
+   - `.gitattributes` contains union merge rules for append-only Squad files
+   - Reports latest regression hook status from `test-results/hook-report.json` (informational only, never fails)
+   - Reports package status at `dist\win-unpacked\Tangent.exe` (warns by default, fails with `-RequirePackage` switch)
+
+3. **Created .squad/scripts/README.md** — Usage documentation with examples
+
+4. **Created .squad/decisions/inbox/basher-validation-guardrails.md** — Decision record documenting the validation approach and constraints
+
+**Key constraints honored:**
+- Does NOT copy FC2's Playwright multi-webserver assumptions (Tangent E2E launches Electron, not web servers)
+- Does NOT run or modify the existing e2e hook
+- Does NOT run packaging — only detects and reports package state
+- Safe on dirty worktree (read-only checks, no process kills)
+- Windows PowerShell style (backslashes, native cmdlets)
+
+**Design decisions:**
+- Exit 0 when required structural checks pass, exit 1 when they fail
+- Package check is warning-only by default; `-RequirePackage` switch promotes to failure
+- Regression hook check is informational only (never fails validation)
+- Color-coded output: Yellow for section headers, Green for pass, Red for fail, Cyan for info
+
+**Test results:**
+Ran validation script — correctly detected:
+- ✅ gitattributes has all 4 union merge rules
+- ✅ Package exists at dist\win-unpacked\Tangent.exe (208 MB)
+- ❌ team.md missing "## Model Policy" (expected — Danny handling in parallel)
+- ❌ routing.md missing Squad V2 concepts (expected — Danny handling in parallel)
+- ❌ ceremonies.md missing gate concepts (expected — Danny handling in parallel)
+- ℹ️ No regression hook report yet (expected)
+
+**Key learnings:**
+1. **Union merge prevents Squad file conflicts** — Git will append changes to decisions.md and history.md files instead of creating merge conflicts. Critical for parallel agent work.
+2. **Fast validation enables pre-commit checks** — Script runs in <1s without building/testing. Can be run after every file edit to catch regressions early.
+3. **Informational vs. required checks** — Package and regression hook are informational (useful to see, but not blockers). Structural Squad files are required (must pass for Squad V2 compliance).
+4. **Tangent-specific packaging workflow** — Must NOT assume FC2's multi-webserver e2e setup. Tangent packages to `dist\win-unpacked\Tangent.exe` via electron-builder, not Playwright server start.
+5. **Switch-based strictness** — `-RequirePackage` allows CI/release pipelines to enforce package existence while allowing local dev to skip it.
+
+**Impact:**
+- Enables quick pre-commit checks for Squad V2 compliance (~1s runtime)
+- Detects structural regressions without running full test/build pipeline
+- Documents expected Squad file structure in executable form
+- Provides visibility into package + regression hook status without file system navigation
+
+### 2026-05-05 — Prompt Timeline Regression Test
+
+**Context:** The HumanContextPanel component displays a timeline of recent user prompts captured from terminal and SDK interactions. The ContextStore maintains a ring buffer (MAX_PROMPTS=10) of prompt entries per session and exposes them via context:get and context:getPrompts IPC handlers.
+
+**What I did:**
+Created a targeted regression test in 	ests/regression/specific.spec.ts that validates the prompt timeline MVP. The test:
+1. Creates/uses an existing session
+2. Injects test prompts via 	angentAPI.context.recordPrompt IPC (stable test seam)
+3. Verifies prompts appear in the context store via 	angentAPI.context.get
+4. Asserts prompt text is visible in the HumanContextPanel DOM
+
+**Test strategy:**
+- Uses existing context:recordPrompt IPC handler (no new test helpers needed)
+- Avoids flaky agent orchestration by directly injecting prompts
+- Validates both backend state (ContextStore) and frontend rendering (HumanContextPanel)
+- Follows ContextStore debounce timing (DEBOUNCE_MS=150) with 800ms wait
+
+**Test coverage:**
+- ✅ Prompt capture via IPC
+- ✅ Context retrieval returns prompt entries
+- ✅ HumanContextPanel renders prompt text in DOM
+- ❌ Copy/expand controls (out of scope for MVP — panel only shows truncated text)
+- ❌ History button in status bar (not implemented — panel auto-shows when session active)
+
+**Key learnings:**
+1. **HumanContextPanel is already integrated** — Lives above the terminal viewport in App.tsx, displays automatically when a session is active. No modal/status-bar button required for MVP.
+2. **Stable test seam exists** — 	angentAPI.context.recordPrompt allows direct prompt injection without launching real agents or capturing terminal output.
+3. **ContextStore uses ring buffer** — Only last 10 prompts retained, deduplicates consecutive identical entries, filters agent launch commands.
+4. **PromptItem click searches terminal** — Panel entries are clickable and trigger xterm.js findPrevious() to locate the prompt in scrollback.
+
+**Would fail if:**
+- HumanContextPanel component removed or renamed
+- Context IPC handlers broken (context:recordPrompt, context:get)
+- Prompt rendering logic removed from PromptItem component
+- ContextStore ring buffer logic broken
+
+
+### 2026-05-05 — Session Panel State Styling Regression Pattern
+
+**Context:** Added targeted regression coverage for a selected Copilot session waiting at startup or in `needs_input` state after a bug where the selected row lost its waiting color during resume-session selection.
+
+**Learning:** For visual state regressions, test the externally visible contract (selected row + status + computed waiting color) rather than internal React class names. A narrow `tangentAPI.test` state injector keeps E2E coverage deterministic without launching real Copilot.
+
+
+
+---
+
+### 2026-05-06: Status Bar Agent Label Removal Regression
+
+**Session:** statusbar-label-cleanup (2026-05-06T14:11:51Z)
+
+**Problem Solved:** After Livingston removed the agent type label display from status bar (e.g., "Copilot CLI", "Shell", "Claude Code"), needed targeted regression test to prevent reintroduction.
+
+**Solution Delivered:** Updated `tests/regression/specific.spec.ts` with structural selector strategy:
+- Used `button[title="Settings"]` as anchor to locate status bar via XPath ancestor traversal
+- Selected only the center section div (`.flex.items-center.gap-2.min-w-0.flex-shrink`) to isolate status bar region
+- Verified forbidden labels ('Copilot CLI', 'Claude Code', 'Shell', 'No Session') do not appear in that specific section
+- Maintained sanity check that 'Ctrl+B panels' still renders
+
+**Initial Test Failure:** First attempt used `.filter({ hasText: /Ctrl\+B panels/i })` which captured entire page content including session rows and terminal output, causing false positives when "Shell" appeared elsewhere in the UI.
+
+**Key Technique:** When testing status bar elements, use structural selectors (class combinations, aria attributes, XPath ancestors) rather than text-based filters to avoid capturing unrelated UI regions with similar text.
+
+**Outcome:** Full regression suite passes (6/6). Test specifically validates the status bar center section isolation, not global page text.
+
+**Test Learning Appended to:** `.squad/agents/basher/history.md` (this file).
+
+---
+
+### 2025-01-18 — Compact Mode Horizontal Collapse
+
+**Context**: Previous test verified `.xterm` visibility toggle but didn't catch the earlier bug where the terminal column consumed horizontal space as blank area while hidden.
+
+**Changes**:
+- Added `data-testid="terminal-column"` to `App.tsx` terminal column container
+- Rewrote `tests/regression/specific.spec.ts` to assert:
+  - Default view: terminal column width > 200px
+  - Compact mode: terminal column width ≤ 10px (not just opacity 0)
+  - Session click auto-expand: terminal column width > 200px again
+- Test now uses `boundingBox()` to validate horizontal collapse, not just visibility
+
+**Result**: Test passes. Would now fail if compact mode hides content without collapsing the column width.
 

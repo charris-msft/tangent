@@ -2,150 +2,6 @@
 
 ## Active Decisions
 
-### 2026-04-12 19:05: PRD intake — Remote Agent Offloading
-**By:** charris-msft (Brady) via Copilot
-**What:** PRD at D:\git\PMStudio\tangent\tangent_remote_prd.md defines remote agent offloading to Dev Boxes. Scope: Plan A only (Copilot CLI/Tangent + ACP over SSH). Plan B (VS Code) deferred.
-**Why:** User provided PRD for new feature work.
-
-### 2026-04-12 19:05: App identity — tangent-2
-**By:** charris-msft (Brady) via Copilot
-**What:** This copy runs as "tangent-2" to coexist side-by-side with the original Tangent in ../release. Branch: "remote". Package name, productName, appId all need updating.
-**Why:** User directive — side-by-side development requirement.
-
-### 2026-04-12 19:05: Dev Box target — charrisdb5
-**By:** charris-msft (Brady) via Copilot
-**What:** The target Dev Box for remote execution is "charrisdb5". Use this as the default/primary Dev Box for development and testing.
-**Why:** User provided their Dev Box name for the remote offloading feature.
-
-### 2026-04-13: PRD Decomposition — Plan A Architecture (58 items)
-**By:** Danny (Architecture) via Copilot
-**What:** Danny's 58-item work decomposition (D:\git\tangent\release-2\.squad\decisions\inbox\danny-prd-decomposition.md) breaks Plan A across 4 phases. Key architectural decisions from the decomposition:
-
-**Upfront Architectural Decisions:**
-1. **Local-as-Primary Model** — Local machine is source of truth for workspace files. Dev Boxes are ephemeral compute.
-2. **Copilot CLI Cloud Sync for Sessions** — Use built-in `sessionSync.level = "account"` for session state. No custom rsync of `~/.copilot/session-state/`.
-3. **Workspace Sync via Hooks** — `agentStop` hook triggers rsync from Dev Box → local after each agent turn. Outbound sync on connect.
-4. **Remote as Opt-In** — Agent profiles get optional `remote.*` fields. Not a default for any agent.
-5. **CopilotACP as Auto-Start Service** — Windows Scheduled Task ensures zero manual steps after first-time setup.
-6. **First-Time Provisioning with Consent** — Tangent shows what it will change on Dev Box before doing it.
-7. **Permission dialogs in local UI** — ACP permission requests bridged to Tangent's local UI, not remote terminal. Maintains security model and user control.
-8. **Local-as-Primary for Failover** — If Dev Box crashes mid-turn, worst case is losing one agent turn's workspace changes. Session state already synced to cloud. Spin up new Dev Box and resume.
-
-**Full decomposition includes:** 4 dependency phases (P0–P4), effort estimates (S/M/L), team role assignments, new npm dependencies (@agentclientprotocol/sdk, @microsoft/devbox-mcp, ssh2, node-rsync), and risk mitigation strategies. See full document for 58 items and timeline estimates.
-
-**Why:** Provides concrete work scope, dependency sequencing, and architectural commitments for 9–11 week Plan A implementation.
-
-### 2026-04-13: ACP SDK API Surface
-**By:** Rusty  
-**Status:** ✅ Accepted  
-**Tags:** #acp #sdk #api
-
-**What:** Exploration of `@agentclientprotocol/sdk` v0.18.2 reveals API surface for ClientSideConnection, AgentSideConnection, Stream, and Client interface patterns.
-
-**Key Decisions:**
-- Use `ClientSideConnection` for Tangent's Dev Box ACP client
-- Implement minimal required `Client` interface (requestPermission, sessionUpdate)
-- Defer stream creation to DevBoxManager (SSH tunnel + stdio bridge)
-- Use `unstable_resumeSession` with fallback to `loadSession`
-- Use `unstable_closeSession` if available during disconnect
-
-**Rationale:** Tangent is a CLIENT connecting to remote ACP agents (not an agent itself). Minimal Client interface reduces complexity. Stream creation separated from AcpClient allows flexible transport.
-
-**Impact:** 
-- AcpClient wraps ClientSideConnection, maps Tangent sessions ↔ ACP sessions
-- DevBoxManager responsible for creating Stream (SSH tunnel + stdio bridge)
-- Future incremental expansion of Client capabilities as needed
-
-**See:** Full discovery details in implementation PR, SDK Docs at https://agentclientprotocol.github.io/typescript-sdk
-
-### 2026-04-18: Explode Multi-Window Tiling — Reposition Existing Windows
-**By:** Danny (Lead/Architect)  
-**Status:** ✅ Implemented  
-**Tags:** #ui #windows #bugfix
-
-**What:** Root cause of overlapping windows in Explode multi-window feature was NOT the tiling algorithm — it was `WindowManager.popOut()` ignoring the bounds parameter for already-existing windows.
-
-**Root Cause:** When users manually popped out sessions then clicked Explode, `popOut()` would focus existing windows but not reposition them via `setBounds()`. Windows remained at their original cascaded positions.
-
-**Decision:** Modify `popOut()` to call `setBounds()` when explicit bounds are provided, even for existing windows.
-
-**Implementation:**
-- Added `if (bounds) { existing.setBounds({...}) }` check in popOut() for existing window path
-- Transparent API: call site (`useExplode`) doesn't need to know if window exists
-- No breaking changes: existing callers without bounds param unaffected
-
-**Testing:**
-- Added `tests/explode-bounds.spec.ts` e2e diagnostic test
-- Asserts: all windows within display workArea, pairwise non-overlap
-- Test failed BEFORE fix (all windows at x=763, y=332), passes AFTER fix
-- All 24 unit tiling tests pass, 6 multi-window regression tests pass, build green
-
-**Files Changed:** `src/main/window/WindowManager.ts`, `tests/explode-bounds.spec.ts`
-
-**Related Work:** Livingston's bounds-clamping fix (commit 26c116e) addressed algorithm precision. This fix addresses application of algorithm results to existing windows. Together they ensure: (1) Tile positions never exceed display bounds (algorithm), (2) Positions are actually applied to all windows (application).
-
-**Key Learnings:**
-- BrowserWindow constructor bounds only apply during creation. Existing windows require `setBounds()` or `setPosition()` + `setSize()`
-- Always use `display.workArea` (excludes taskbar), not `display.bounds` which includes taskbar area
-- Electron enforces `minWidth: 400, minHeight: 300` — will silently enlarge windows violating minimums, causing overlap. Known limitation with 16+ windows on smaller displays.
-
-### 2026-04-18: Explode Already-Popped Windows — Root Cause & Fix
-**By:** Danny (Lead/Architect)  
-**Status:** ✅ Fixed  
-**Tags:** #ui #windows #bugfix #explode
-
-**Problem:** Explode still caused overlapping windows even after popOut-bounds fix. With 5 already-popped sessions, windows stayed at cascaded positions.
-
-**Root Cause:** `useExplode.ts` filtered OUT already-popped windows before computing tile layout:
-```ts
-const poppedIds = await winApi.getPoppedSessionIds?.()
-const eligible = sessions.filter((s) => !poppedIds.includes(s.id) && s.status !== 'exited')
-```
-
-When all 5 were popped, filter excluded all 5 → `computeTileLayout()` returned `[]` → loop never executed → no windows repositioned.
-
-**Decision:** Remove already-popped filter. Explode tiles ALL windows (popped or not).
-
-**Why Test Missed It:** `tests/explode-bounds.spec.ts` manually called `winApi.popOut()` directly, bypassing the hook's filter. Test verified the low-level method works but didn't test the hook's filter logic.
-
-**Key Insight:** Integration tests that bypass higher-level logic (hooks) can pass while real bugs persist in that logic. Always test at the FULL user code path: button click → event handler → React hook → IPC call → main process → Electron API.
-
-**Files Changed:** `src/renderer/hooks/useExplode.ts`, `src/renderer/App.tsx`, `tests/explode-real-ui.spec.ts`
-
-### 2026-04-18: Explode — Include Main Window in Tile Grid (Final Root Cause)
-**By:** Danny (Lead/Architect)  
-**Status:** ✅ Implemented  
-**Tags:** #ui #windows #bugfix #rootcause
-
-**Problem:** After two prior fixes, users still observed overlapping windows. Both prior e2e tests passed but only asserted popout-to-popout non-overlap and ignored the main Tangent window.
-
-**Root Cause — Proven by Live Evidence:** Explode moves only popouts. Main window stays at default bounds (~1200×800, centered), visually overlapping every popout. Evidence from Brady's dual DELL U2720Q @165% DPI, primary workArea 2328×1266 with 12 popouts:
-```
-overlap pairs (total): 12
-  all 12 pairs involve id=1 (main window)
-popout-to-popout overlaps: 0
-```
-
-**Decision:** Main Tangent window participates in tile grid as ordinary cell.
-
-- **WindowManager.setMainBounds():** New method that lowers `minimumSize` (Electron silently enlarges windows violating minimums, defeating bounds), then calls `setBounds()`
-- **IPC & Preload:** New handler `window:setMainBounds`, exposed as `tangentAPI.window.setMainBounds(bounds)`
-- **useExplode:** Reserve sentinel tile slot `__tangent_main_window__` as first cell, call `setMainBounds(firstTile)` before popouts
-
-**Why Not Minimize Main:** Brady's hint explicitly stated main window "should be" in grid. Hiding it makes Explode surprising — users lose Sessions panel and controls. Tiling keeps main visible and useful as "hub" cell.
-
-**Test Coverage:** Rewrote `tests/explode-bounds.spec.ts` to:
-1. Create 5 sessions + use real IPC flow
-2. Collect bounds for EVERY BrowserWindow (main + popouts)
-3. Assert pairwise non-overlap across ALL windows
-4. Assert all windows fit in workArea
-
-Old assertion space (popouts only) is retired. This test would have caught the bug before both prior shipped fixes.
-
-**Governance Note:** Two prior fixes shipped based on tests that passed but did not reproduce actual failure mode. Lesson: when asserting "no overlap" on windowed layout, **include every visible BrowserWindow in assertion space, not filtered subset.** Filtering to subset hides bugs in excluded windows — exactly where the bug lived.
-
-**Files Changed:** `src/main/window/WindowManager.ts`, `src/main/ipc/windowHandlers.ts`, `src/preload/index.ts`, `src/renderer/hooks/useExplode.ts`, `tests/explode-bounds.spec.ts`
-
 ### 2026-04-19: Explode Refinement #1 — Exclusion-Rect Tiling (Keep Main in Place)
 **By:** Danny (Lead/Architect)  
 **Status:** ✅ Implemented  
@@ -228,6 +84,379 @@ Old assertion space (popouts only) is retired. This test would have caught the b
 **Files Changed:** `src/main/terminal/TerminalManager.ts`, `src/main/session/SessionManager.ts`, `src/renderer/components/Terminal.tsx`, `src/renderer/components/PopoutWindow.tsx`, `src/main/window/WindowManager.ts`, `tests/terminal-mirror.spec.ts`
 
 **Related Commits:** `500fc15`
+
+### 2026-05-05: Squad V2 Governance Upgrade — Model Policy & Reviewer Diversity
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Implemented  
+**Tags:** #squad #governance #models #review
+
+**What:** Comprehensive Squad governance upgrade establishing:
+1. **Model Policy** by agent type (code agents: sonnet-4.5, reviewer: gpt-5.5, logging: haiku-4.5)
+2. **Reviewer Turk** — GPT-5.5 specialist for escalated architectural rejections
+3. **Tangent-specific routing** — Domain map (PTY/status/ipc/SDK/React/E2E/packaging) + response modes
+4. **Process ceremonies** — Pre-Flight, Per-Task Gate, Packaging Smoke Gate, Retrospective
+5. **Packaging guardrails** — npm build + electron-builder flow, npmRebuild=false mandatory, test regression evolution
+
+**Files changed:** `.squad/team.md`, `.squad/routing.md`, `.squad/ceremonies.md`, `.squad/casting/registry.json`, `.squad/agents/turk/*`
+
+**Rationale:** FC2 audit revealed delegation collapse pattern. Tangent adopts proven fixes: cost-aware model hierarchy, model-diverse review, ceremony-based process enforcement, Tangent-specific constraint capture.
+
+**Cost hierarchy:** haiku < sonnet < gpt-5.5 < opus. Sonnet handles 95% of work at reasonable cost. GPT-5.5 provides non-Anthropic perspective only on escalation (prevents cost explosion).
+
+**Impact:** Cost predictability, review quality, velocity gates, routing clarity.
+
+### 2026-05-05: Squad V2 Validation Guardrails — Union Merge & Structural Checks
+**By:** Basher (Test Engineer)  
+**Status:** ✅ Implemented  
+**Tags:** #squad #validation #compliance
+
+**What:** Structural compliance guardrails for Squad V2:
+1. **Union merge rules** in `.gitattributes` — append-only Squad files (decisions.md, history.md, logs)
+2. **Validation script** (`.squad/scripts/validate-squad-process.ps1`) — 6 checks without expensive builds
+3. **Documentation** (`.squad/scripts/README.md`) — usage examples, parameters
+
+**Checks:** team.md structure, routing.md concepts, ceremonies.md gates, .gitattributes union rules, regression hook status, package status.
+
+**Design:** Read-only, runs on dirty worktrees, exit 0 on pass, exit 1 on fail. Package check warning-only by default (use `-RequirePackage` to enforce).
+
+**Rationale:** Squad V2 requires structural conventions to prevent merge conflicts and ensure process compliance. Fast validation without triggering expensive builds or tests.
+
+**Impact:** Pre-commit validation enabled. Structural regression detection. Tangent-specific (safe on dirty worktree, Electron-aware).
+
+### 2026-05-05: Prompt/Task Timeline — Backend + Frontend Planning
+**By:** Rusty (Backend) + Livingston (Frontend)  
+**Status:** ✅ Planning complete, ready for parallel implementation  
+**Tags:** #feature #timeline #planning
+
+**Backend Plan (Rusty):**
+- Data model for prompt history and task tracking
+- Session state persistence (local + cloud sync strategy)
+- IPC message specifications for timeline updates
+- Agent result aggregation and storage
+- Storage sizing for 1000+ entries per session
+
+**Frontend Plan (Livingston):**
+- Timeline component layout (vertical scrollable history)
+- Task state visualization (pending, in_progress, done, blocked)
+- Wireframes for TimelinePanel integration with SessionsPanel
+- Component hierarchy (TimelinePanel, TimelineEntry, TaskCard, PromptBlock)
+- Accessibility (keyboard nav, ARIA), performance (lazy-loading, virtualization)
+
+**Rationale:** Parallel work enabled by finalizing backend/frontend contracts before implementation. Planning phase complete; execution can proceed with non-blocking dependencies.
+
+**Architecture:** TimelinePanel persists prompts and task results, integrated into SessionsPanel. Results searchable by agent type, timestamp, outcome. Agent attribution and timing annotations preserved.
+
+**Impact:** Feature ready for parallel backend + frontend implementation. Contracts finalized.
+
+### 2026-05-05: Waiting Status for Copilot Pickers
+**By:** Rusty (Backend)
+**Status:** ✅ Implemented
+**Tags:** #status #systemb #copilot
+
+**What:** The status engine now treats only a bare `❯`/`›` prompt line as idle. A `❯` marker followed by selectable content is an interactive picker, not the agent-ready prompt.
+
+**Why:** Copilot's resume-session picker uses `❯` for the selected row and prints `Select a session to resume:` / `Enter to select`. The previous prompt heuristic suppressed `needs_input` whenever any line started with `❯`, so launch-time resume pickers did not color the session as waiting.
+
+**Impact:** SystemB now maps Copilot resume/session pickers to `needs_input`, preserving the Sessions panel waiting/attention color while keeping stale completed ask-user text suppressed when a bare idle prompt is visible.
+
+**Files Changed:** `src/main/status/system-b.ts` (detection rules), unit test coverage added
+
+### 2026-05-05: Session Waiting Rows Use Renderer-Derived Attention Color
+**By:** Livingston (Frontend)
+**Status:** ✅ Implemented
+**Tags:** #ui #sessions #status #rendering
+
+**What:** In the Sessions panel, non-shell rows that render `Waiting...` because `lastActivity` is empty or only a process path (`cmd.exe`, `pwsh.exe`, `powershell.exe`) now use a renderer-derived `needs_input` visual state.
+
+**Why:** Copilot startup/resume pickers can be waiting on the user while the backend status still reports `shell_ready`, `agent_launching`, or `agent_ready`. The row's visible status text is the user's source of truth, so the selected active row must keep the red attention strip/dot/background instead of falling back to uncolored shell styling.
+
+**Impact:**
+- Backend status remains unchanged.
+- Renderer status text and status color are derived together in `SessionsPanel/sessionRowState.ts`.
+- Regression coverage asserts selected waiting Copilot rows keep the waiting color.
+
+**Files Changed:** `src/renderer/components/SessionsPanel/sessionRowState.ts` (new), `src/renderer/components/SessionsPanel/index.tsx`, unit tests added
+
+### 2026-05-05: Session Waiting Color Regression Coverage
+**By:** Basher (Test Engineer)
+**Status:** ✅ Implemented
+**Tags:** #testing #e2e #sessions #status-ui
+
+**What:** Added a deterministic regression path for Sessions panel status styling by exposing stable row test attributes and a `tangentAPI.test.setSessionState` helper (NODE_ENV=test only).
+
+**Why:** The session waiting color bug was visual and state-specific: a selected Copilot session waiting at startup or in `needs_input` could lose its waiting color. Reproducing that via real Copilot startup/resume is slow and flaky, so the targeted regression should inject the public session state and assert the visible contract.
+
+**Impact:** Future visual regressions in selected-session status styling can be covered without depending on agent runtime, terminal timing, or internal CSS class names. Test instrumentation provides stable assertions.
+
+**Files Changed:** `src/renderer/components/SessionsPanel/` (test attributes), `src/preload/test.ts` (new test API), `tests/regression/specific.spec.ts` (rewritten)
+
+### 2026-05-06: Forge Chat Foundry Agent Integration — Research & Requirements
+
+**By:** Linus (Integration Dev) via Copilot  
+**Date:** 2026-05-10  
+**Status:** 🟡 Spike complete; research spike handed to Danny for PoC planning  
+**Tags:** #foundry #agents #integration #insights-agent #auth  
+**Reference:** `.squad/decisions/inbox/linus-legacy-fc-foundry-agents.md` (401 lines)
+
+**What:** Spike research of `coreai-microsoft/forge` legacy Forge Chat (`products/foundry-ui` Python Starlette server) to understand:
+- How legacy FC discovers and invokes Azure AI Foundry agents
+- How the **Insights Agent** (App Insights / KQL MCP wrapper) works as a Foundry agent
+- Auth patterns (Easy Auth + OBO cloud; `AzureCliCredential` local)
+- Configuration matrix and Azure resource requirements
+
+**Key Findings:**
+
+1. **Hot path is single SSE endpoint:** Legacy FC proxies all agent traffic through `POST /api/agui/run` — one server route for all agent streaming.
+
+2. **Foundry agent invocation shape:** Uses Azure AI Projects SDK with OpenAI-compatible Responses API:
+   ```python
+   openai_client = AIProjectClient(credential, endpoint).get_openai_client()
+   openai_client.responses.create(
+     input=messages,
+     stream=True,
+     extra_body={
+       "agent_reference": {"type": "agent_reference", "name": agent_name},
+       "structured_inputs": {...optional...}
+     }
+   )
+   ```
+
+3. **AG-UI event translation is the contract:** Foundry emits raw events (`response.output_text.delta`, `response.function_call_arguments.*`, etc.); FC translates to **AG-UI SSE protocol** (`TEXT_MESSAGE_*`, `TOOL_CALL_*`, `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, `CONSENT_REQUIRED`). Translation table is battle-tested and must be ported verbatim.
+
+4. **The Insights Agent is just `insights-agent`** — a Foundry prompt agent (`agents/insights-agent/agent.yaml`) with:
+   - Model: gpt-5.4
+   - MCP server: `insights-mcp[-int].purplesky-21d895f1.francecentral.azurecontainerapps.io/mcp`
+   - 12 tools (query_metric, list_metrics, query_anomaly, get_query_kql, …)
+   - Invoked identically to any other Foundry agent (no special code path)
+   - **Not related to `appInsightsConnectionString`** (that's frontend telemetry JS SDK)
+
+5. **Auth complexity varies by deployment:**
+   - **Cloud (Container Apps):** Easy Auth sidecar provides `X-MS-TOKEN-AAD-ACCESS-TOKEN` (aud=ai.azure.com). FC's two-path resolver: (a) Foundry audience → direct passthrough; (b) others → MSAL OBO with MI `client_assertion` via FIC (`api://AzureADTokenExchange`)
+   - **Local dev (PoC):** `az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47` + `AzureCliCredential` end-to-end. No Easy Auth. Simpler path for initial PoC.
+
+6. **Required cloud resources for production:** App registration (auth client_id), User-assigned Managed Identity (UAMI), Federated Identity Credential (FIC), Easy Auth on Container App, UAMI with `Azure AI User` role on Foundry project.
+
+7. **TS SDK risk:** Must verify `@azure/ai-projects` (or `openai` JS client via `client.inference.azureOpenAI`) supports `extra_body` / `agent_reference` pass-through. If not, fallback to raw `fetch` to `/openai/v1/responses` endpoint with bearer token.
+
+**PoC-Grade Path (Linus proposes):**
+- Build Node/TS **Foundry agent connector** in `src/main/` (not Python Starlette) that:
+  1. Resolves config (AZURE_TENANT_ID, FOUNDRY_PROJECT_ENDPOINT)
+  2. Acquires token via `AzureCliCredential` (local only)
+  3. Lists agents with `AIProjectClient.agents.list()`
+  4. Streams one turn to `insights-agent` via Responses API
+  5. Translates Foundry events to AG-UI events
+- No UI yet; CLI script or thin debug harness is enough to validate
+- Integration owner: Linus; SDK parity owner: Rusty
+
+**Citations:**
+- Server entry: [`products/foundry-ui/host/server/app.py`](https://github.com/coreai-microsoft/forge/blob/main/products/foundry-ui/host/server/app.py)
+- AG-UI route: [`products/foundry-ui/host/server/routes/agui.py`](https://github.com/coreai-microsoft/forge/blob/main/products/foundry-ui/host/server/routes/agui.py)
+- Auth: [`products/foundry-ui/host/server/auth/`](https://github.com/coreai-microsoft/forge/tree/main/products/foundry-ui/host/server/auth)
+- Insights Agent: [`agents/insights-agent/agent.yaml`](https://github.com/coreai-microsoft/forge/blob/main/agents/insights-agent/agent.yaml)
+- Env-var matrix: [`products/foundry-ui/host/server/config/_settings.py`](https://github.com/coreai-microsoft/forge/blob/main/products/foundry-ui/host/server/config/_settings.py)
+
+**Why:** User strategy is Forge Chat (as Electron app, not legacy SPA) that connects to Foundry agents. This research unblocks PoC architecture and validates the shape.
+
+---
+
+### 2026-05-06: Forge Chat Foundry Agent PoC — Next Step (Adopted)
+
+**By:** Danny (Lead/Architect) via Copilot  
+**Date:** 2026-05-06  
+**Status:** 🟢 Adopted as next PoC milestone; team routing finalized  
+**Tags:** #forge-chat #foundry #agents #insights-agent #auth #poc #decision  
+**Reference:** `.squad/decisions/inbox/danny-forge-chat-foundry-poc-next-step.md` (170 lines)
+
+**What:** Decision to adopt Linus's spike proposal as the next Forge Chat PoC milestone. Build a **minimal Node/TypeScript Foundry agent connector** that can list Foundry agents and stream one turn to `insights-agent` using local `az login` credentials.
+
+**Scope — Intentionally Boring:**
+- No new UI, no Easy Auth, no Cosmos, no GitHub OAuth, no multi-project registry
+- CLI/script or thin debug surface that proves `listAgents()` and `streamRun("insights-agent")` works
+- Local-only auth (AzureCliCredential) — defer hosted auth to Phase 2
+- Target project: Anvil INT (`https://ai-account-ccqhoqjgdz3mw.services.ai.azure.com/api/projects/forge-anvil-int-eus2`)
+
+**Architecture Flow:**
+```
+Forge Chat renderer/debug harness
+  → IPC request/push events
+  → main-process FoundryAgentConnector
+      1. resolve config: AZURE_TENANT_ID + FOUNDRY_PROJECT_ENDPOINT
+      2. acquire token via AzureCliCredential for local PoC
+      3. list agents with AIProjectClient.agents.list()
+      4. invoke Responses API stream with agent_reference + structured_inputs
+      5. translate Foundry stream events into AG-UI events
+  → Azure AI Foundry project
+      → Insights Agent
+          → Insights MCP Container App
+              → App Insights / KQL / metric tools
+```
+
+**Architectural Boundary:** Renderer never owns tokens. Foundry credentials, token caching, stream cancellation belong in main. Shared AG-UI event types (protocol shape, not secrets) live in `src/shared/`.
+
+**App Insights / Insights Agent MVP Scope:**
+- The Insights Agent is NOT a special integration. It's a standard Foundry prompt agent that legacy FC discovers and invokes like any other.
+- MVP: (1) Confirm `agents.list()` returns `insights-agent`; (2) Stream a prompt to it; (3) Emit AG-UI events for assistant text and tool calls; (4) Validate at least one Insights MCP tool call in stream; (5) Render/debug tool-call events as structured output later.
+- Do NOT wire `APPLICATIONINSIGHTS_CONNECTION_STRING` for this milestone (that's frontend telemetry, not agent connection).
+
+**Auth Path — Local Development First:**
+
+Prereq: `az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47`
+
+Required config:
+- `AZURE_TENANT_ID=72f988bf-86f1-41af-91ab-2d7cd011db47`
+- `FOUNDRY_PROJECT_ENDPOINT=https://ai-account-ccqhoqjgdz3mw.services.ai.azure.com/api/projects/forge-anvil-int-eus2`
+
+Implementation rule: Create resolver shaped like `resolveToken(audience) → { token, audience, flow, expiresAt, cached }`, but implement only `flow=cli` initially. This keeps callers stable when hosted auth arrives in Phase 2.
+
+**Hosted Auth — Deferred but Design Seam Now:**
+- Legacy FC uses Azure Container Apps Easy Auth + Managed Identity for cloud.
+- Open architecture decision before production: **desktop-native auth (MSAL Node public-client) vs. server-mediated auth (Easy Auth/OBO)**. If Forge Chat remains pure Electron desktop, the hosted pattern may be wrong center of gravity.
+
+**Implementation Slices (Team Routing):**
+
+1. **Minimal first milestone — connector smoke test** (Owner: Linus)
+   - Main-process Foundry connector using `AzureCliCredential`, lists agents, finds `insights-agent`, streams one prompt, prints normalized AG-UI events, cancels cleanly.
+
+2. **Protocol model and translation parity** (Owner: Linus, Reviewer: Danny)
+   - Add shared AG-UI event types and port Foundry-event translation table verbatim.
+
+3. **SDK parity decision** (Owner: Rusty)
+   - Verify TS SDK (`@azure/ai-projects` + `openai` JS package) supports Responses API streaming with `extra_body.agent_reference`. If not, raw HTTPS fallback.
+
+4. **Main-process IPC seam** (Owner: Livingston)
+   - Expose `foundry.listAgents()` and cancellable stream-run event channel through preload using Tangent's existing IPC conventions.
+
+5. **Insights debug UI / agent sidebar entry** (Owner: Livingston)
+   - Add thinnest UI to invoke `insights-agent` and display text/tool-call events.
+
+6. **Validation and automation** (Owner: Basher)
+   - Tests around event translation, cancellation, missing config, missing agent, friendly 401/403 modes. Full e2e against Foundry is opt-in.
+
+7. **Hosted auth design spike** (Owner: Danny + Rusty, after local PoC works)
+   - Decide whether production is hosted/server-mediated or desktop-native. Port Easy Auth/OBO/MI behavior only after decision.
+
+**Trade-offs: Copy, Adapt, Avoid**
+
+| Legacy FC Item | Decision | Trade-off |
+|---|---|---|
+| `agent_reference` extra body | Copy | Lowest risk; this is the Foundry contract. |
+| Foundry → AG-UI event translation | Copy | Preserves compatibility; avoids bikeshedding. |
+| `TokenResolver` shape | Adapt | Stable seam for future CLI/MI/OBO flows. |
+| AzureCliCredential local path | Copy | Fastest PoC path; single-user dev only. |
+| Easy Auth headers + OBO | Defer/adapt later | Correct for hosted ACA; wrong for desktop Electron. |
+| Python Starlette server | Avoid | Would duplicate runtime; fight Electron. |
+| Cosmos chat persistence | Avoid for PoC | Not on critical path; in-memory fine initially. |
+| GitHub OAuth structured input | Defer | Only needed for agents declaring `auth_token`. |
+| Multi-project registry | Defer | Single Foundry project enough for PoC. |
+
+**Known Unknowns:**
+1. Does TS SDK expose same Responses streaming path as Python?
+2. Does `extra_body.agent_reference` pass through cleanly in JS client?
+3. Does developer identity have `Azure AI User` on Anvil INT project?
+4. Is `insights-agent` deployed in target project today?
+5. What API version for raw Responses API if SDK parity insufficient?
+6. How should cancellation propagate from Electron IPC to HTTP stream?
+7. Before production: desktop-native MSAL or server-mediated auth?
+
+**Validation Checklist:**
+- [ ] `az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47` completed.
+- [ ] Missing `FOUNDRY_PROJECT_ENDPOINT` fails with clear local setup message.
+- [ ] `listAgents()` returns ≥ 1 agent including `insights-agent` (or helpful error).
+- [ ] `streamRun({ agent: "insights-agent" })` emits `RUN_STARTED`.
+- [ ] Stream emits assistant text and/or tool-call AG-UI events.
+- [ ] Stream ends with `RUN_FINISHED` or structured `RUN_ERROR`.
+- [ ] At least one Insights MCP tool call observed in stream.
+- [ ] Token resolver shows `flow=cli` locally.
+- [ ] Second token request uses cache when valid.
+- [ ] 401/403 errors identify likely tenant/RBAC fixes without dumping secrets.
+- [ ] Cancellation closes stream without orphaning connections.
+- [ ] No secrets or bearer tokens committed or logged.
+
+**Why:** PoC keeps focus on architectural uncertainty that matters: can Forge Chat connect to Foundry agent surface and stream the Insights Agent? Everything else is secondary. This milestone is intentionally small and boring to avoid prematurely copying hosted auth and persistence decisions that may not survive the Electron deployment model.
+
+### 2026-05-12: Terminal Containment Pattern — Overflow Clipping & Flex Boundary
+**By:** Livingston (Frontend Dev)  
+**Status:** ✅ Implemented  
+**Tags:** #ui #terminal #xterm #layout
+
+**Problem:** Terminal content (xterm) could render outside its column boundary and paint stray wrapped text under the right AgentsSidebar rail.
+
+**Root Cause:** xterm cached pixel width from previous fit. When flex siblings or the right rail changed available width, visible overflow allowed stale terminal layers to paint outside the terminal column.
+
+**Decision:** Terminal rendering must be clipped at the renderer flex-cell boundary. All containers (App shell row, terminal column, `TerminalViewport`, xterm host) use `overflow: hidden`.
+
+**Implementation:**
+- Keep terminal column `min-w-0` and `overflow: hidden`
+- Keep `TerminalViewport` and xterm host `overflow-hidden`
+- Call `fitAddon.fit()` only when host container has positive `clientWidth` and `clientHeight`
+- Use CSS to prevent horizontal xterm viewport overflow
+
+**Key Design Decision:** Clipping is the single source of containment truth. No reliance on parent width synchronization; instead, all ancestors maintain the boundary contract.
+
+**Files Changed:** `src/renderer/App.tsx`, `src/renderer/components/Terminal/TerminalViewport.tsx`, `src/renderer/styles/globals.css`
+
+**Validation:** `npm run build` passed, Playwright regression passed, packaged exe refreshed.
+
+---
+
+### 2026-05-12: Terminal Wrap Regression Guards — Bounding-Box Contract
+**By:** Basher (Test Engineer)  
+**Status:** ✅ Implemented  
+**Tags:** #testing #e2e #terminal #layout #agents-sidebar
+
+**Problem:** Targeted regressions for terminal/sidebar layout needed to assert against terminal text clipping under the agent rail.
+
+**Root Cause:** Screenshots are fragile and hard to compare reliably. The actual geometric contract is simpler: terminal content boxes must stay within `data-testid="terminal-column"` and must not reach the right AgentsSidebar rail.
+
+**Decision:** Targeted regression tests should assert DOM bounding boxes instead of snapshots.
+
+**Implementation:**
+- Visible xterm surfaces (`.xterm`, `.xterm-screen`, `.xterm-rows`, `.xterm-viewport`) must stay within terminal column bounds
+- `tests/regression/specific.spec.ts` writes long terminal line and verifies terminal surface boxes clear the rail anchored by the accessible "Add project" button
+- Bounding-box checks are deterministic, fast, directly test the user-observable contract
+
+**Key Design Decision:** Use bounding-box geometry assertions; do not depend on pixel snapshots or CSS class introspection.
+
+**Files Changed:** `tests/regression/specific.spec.ts`
+
+**Validation:** `npm run test:regression` 6/6 passed, specific bounding-box assertions pass.
+
+---
+
+### 2026-05-12: Squad Governance Alignment — Import fc2 Durability Patterns
+**By:** Danny (Lead/Architect)  
+**Status:** ✅ Implemented  
+**Tags:** #squad #governance #process
+
+**Problem:** Squad V2 processes needed durability patterns proven in parallel projects (fc2).
+
+**Decision:** Import three low-risk governance improvements from fc2:
+1. **Heartbeat.md** — lightweight status tracking file with updated_at, phase, agent, current_task, status, last_action
+2. **Formalized config.json model policy** — moved from team.md prose to machine-readable structure with explicit agent-model overrides (danny, turk, scribe, ralph)
+3. **Enhanced routing.md** — added explicit "Hard Rejection Path" and "Testing & Integration Gates" sections for escalation clarity
+
+**Rationale:** These patterns provide quick visibility into project state without cross-referencing multiple files. Lightweight overhead vs. significant clarity gain for team onboarding and async context.
+
+**Implementation:**
+- Added `.squad/heartbeat.md` with lifecycle tracking
+- Updated `.squad/config.json` with `defaultModel` and `agentModelOverrides`
+- Enhanced `.squad/routing.md` with escalation/test gates documentation
+
+**Trade-offs:** Minimal duplication (team.md rationale still needed) vs. machine-readable policy enabling tooling.
+
+**Breaking Changes:** None — all additive.
+
+**Risk Assessment:**
+| Factor | Assessment |
+|--------|------------|
+| **Breaking changes** | None — all additive |
+| **Team buy-in** | High — patterns are lightweight and reusable |
+| **Maintenance burden** | Minimal — heartbeat is single-file, config.json mirrors team.md |
+| **Applicability** | Durable across future projects with different domains |
+
+**Validation:** `.squad/` files validated per existing structural compliance checks.
+
+---
 
 ## Governance
 

@@ -30,6 +30,13 @@
       "universe": "Ocean's Eleven",
       "status": "active"
     },
+    "turk": {
+      "created_at": "2026-05-05T14:25:05.935Z",
+      "persistent_name": "Turk",
+      "universe": "Ocean's Eleven",
+      "status": "active",
+      "model": "gpt-5.5"
+    },
     "scribe": {
       "created_at": "2026-04-13T01:57:51.174Z",
       "persistent_name": "Scribe",

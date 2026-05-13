@@ -1,3 +1,10 @@
 {
-  "version": 1
+  "version": 1,
+  "defaultModel": "claude-sonnet-4.5",
+  "agentModelOverrides": {
+    "danny": "claude-opus-4.7",
+    "turk": "gpt-5.5",
+    "scribe": "claude-haiku-4.5",
+    "ralph": "claude-haiku-4.5"
+  }
 }

@@ -108,3 +108,23 @@ This mirroring pattern applies to remote sessions too. When a remote ACP session
 
 **No backend changes needed** — existing IPC patterns for session terminal updates work identically for both local and remote agents. Mirroring is transparent at the manager level.
 
+
+
+### 2026-05-10: Legacy Forge Chat / Foundry agent integration research
+
+Researched `coreai-microsoft/forge` `products/foundry-ui` (legacy FC) end-to-end. Full handoff doc: `.squad/decisions/inbox/linus-legacy-fc-foundry-agents.md`.
+
+**Learnings:**
+
+- **Legacy FC is a Starlette Python server**, not just a SPA. The hot path is **one** SSE endpoint: `POST /api/agui/run`. Everything else (`/api/agents`, `/api/token`, `/api/me`, `/api/chats`) is supporting cast.
+- **Foundry agent invocation = OpenAI Responses API + `extra_body`.** The trick: `AIProjectClient.get_openai_client()` returns an OpenAI-compatible client; pass `extra_body={"agent_reference":{"type":"agent_reference","name":<agent>}, "structured_inputs":{...}}` to `responses.create(stream=True)`. No custom REST surface, no thread/run primitives — Foundry hides those behind the OpenAI shape.
+- **AG-UI event translation is the contract**, not Foundry's raw events. Mapping: `response.output_text.{delta,done}` → `TEXT_MESSAGE_*`; `response.function_call_arguments.*` → `TOOL_CALL_*`; `output_item.done(function_call_output)` → `TOOL_CALL_RESULT`; `output_item.added(oauth_consent_request)` → `CONSENT_REQUIRED`. Port this verbatim — every event type string is a contract with the legacy SPA and will save us debugging.
+- **The "App Insights agent" is just `insights-agent`** — a Foundry prompt agent (`agents/insights-agent/agent.yaml`, `displayName: Insights Agent`, model gpt-5.4) wrapping a remote MCP server (`insights-mcp[-int].purplesky-21d895f1.francecentral.azurecontainerapps.io/mcp`) with 12 KQL/metric tools, all auto-approved (`require_approval.never`). FC discovers it via `client.agents.list()` and invokes it identically to any other agent — **no per-agent code path**. The `appInsightsConnectionString` in `/api/config` is unrelated frontend telemetry; do not conflate.
+- **Two-path auth in cloud:** Easy Auth ACA sidecar provides `X-MS-TOKEN-AAD-ACCESS-TOKEN` (aud=ai.azure.com) + `X-MS-TOKEN-AAD-ID-TOKEN` (aud=app client id). For the Foundry audience, return the access token directly. For other audiences (Graph, etc.), MSAL OBO with the ID token, where `client_credential` is a JWT from MI's `api://AzureADTokenExchange/.default` (FIC). Fallback = MI/CLI app identity.
+- **Local dev path is much simpler:** `CONFIG_NAME=local` + `az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47` + `AzureCliCredential` everywhere. No Easy Auth, no OBO. This is what our PoC should target first.
+- **Cross-tenant projects** use `ClientAssertionCredential(tenant_id, client_id=federatedClientId, func=lambda: MI.get_token('api://AzureADTokenExchange'))` — only relevant if we add AME projects later. Anvil INT is in MSFT tenant; not needed for PoC.
+- **Discovery is project-scoped.** `FOUNDRY_PROJECT_ENDPOINT=https://<acct>.services.ai.azure.com/api/projects/<name>`. Failures (`AADSTS50020`, "Workspace not found") must be caught per-project and skipped, never propagated.
+- **Agent display metadata is hard-coded** in legacy FC's `_DEFAULT_AGENT_DISPLAY`. Anti-pattern — drive it from the agent definition instead.
+- **Per-user side-channel** for things like GitHub tokens uses `structured_inputs` on the agent definition (e.g. `auth_token`). FC injects `{"auth_token": f"Bearer {gh_token}"}` only if the agent declares it. Insights Agent does NOT declare it — its MCP is app-identity-only.
+- **TS SDK parity is the real risk** for the PoC: must verify `@azure/ai-projects` (or the JS `openai` package via `client.inference.azureOpenAI`) accepts `extra_body` / `agent_reference`. If not, raw `fetch` to `/openai/v1/responses` with a `credential.getToken('https://ai.azure.com/.default')` bearer is the fallback.
+

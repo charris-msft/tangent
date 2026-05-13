@@ -30,6 +30,76 @@
 
 <!-- Append learnings below -->
 
+### 2026-05-05 — Squad Governance Upgrade: Model Policy & Review Diversity
+
+**Decision: Cost-Optimized Model Selection**
+- Default all code agents (Danny, Rusty, Linus, Livingston, Basher) to `claude-sonnet-4.5` — handles 95% of routine work at reasonable cost
+- Logging/monitoring (Scribe, Ralph) use `claude-haiku-4.5` — ultra-low-cost for background observability
+- Deep second opinion reviewer (Turk) uses `gpt-5.5` — model diversity for hard architectural disagreements
+- Trade-off: Cost efficiency (sonnet baseline) vs. model diversity (gpt-5.5 only on escalation)
+- Alternative rejected: All-sonnet (monoculture risk), All-gpt-5.5 (3-5x cost), All-opus (prohibitive)
+
+**Decision: Turk as Model-Diverse Reviewer**
+- Added Turk (Ocean's Eleven casting) as on-demand GPT-5.5 reviewer
+- Invoked only on Danny rejection + re-rejection OR explicit coordinator escalation
+- Provides non-Anthropic perspective when sonnet-based agents disagree internally
+- Rejection authority: can require different agent revise (not original author)
+- Trade-off: High per-use cost vs. architectural insurance and monoculture prevention
+
+**Decision: Turk as Model-Diverse Reviewer**
+- Added Turk (Ocean's Eleven casting) as on-demand GPT-5.5 reviewer
+- Invoked only on Danny rejection + re-rejection OR explicit coordinator escalation
+- Provides non-Anthropic perspective when sonnet-based agents disagree internally
+- Rejection authority: can require different agent revise (not original author)
+- Trade-off: High per-use cost vs. architectural insurance and monoculture prevention
+
+**Decision: Squad-First Reflex as Coordinator Check**
+- Coordinator runs checklist before every user response: (1) Is there a specialist? Route to them. (2) Can agents work in parallel? Spawn all as background. (3) Simple fact? Answer directly.
+
+### 2026-05-14 — fc2 Squad Review & Process Hardening
+
+**Imported from fc2:**
+1. **Heartbeat.md pattern** — Added lightweight status file tracking project phase, current task, and last action. Enables quick async context without cross-referencing multiple files.
+2. **Config.json formalization** — Moved model policy from team.md prose into machine-readable `config.json` with explicit overrides for danny (claude-opus-4.7), turk (gpt-5.5), scribe/ralph (haiku).
+3. **Enhanced routing.md** — Added "Escalation & Review Gates" section clarifying when Turk is invoked (hard rejection + re-rejection OR explicit escalation) and "Testing & Integration Gates" documenting E2E regression suite validation rules.
+
+**Rejected (not applicable):**
+- SB Integration Test Pattern (Azure Service Bus specific)
+- Auth Design Gate pattern (pre-requisite work not yet scheduled)
+- Backend-specific ceremonies (Slice validation, RBAC/runstate gates)
+
+**Trade-offs:**
+- Config.json duplicates team.md but enables programmatic policy reading
+- Heartbeat adds one file but clarifies project state for async team members
+- Escalation gates prevent runaway escalations without restricting necessary review
+
+**Confidence:** High — all changes are additive, low-risk, and durable across projects.
+
+- Anti-pattern detection prevents coordinator writing code, running tests, or sequential spawns when parallel possible
+- Trade-off: One extra decision step vs. better work distribution and velocity
+
+**Decision: Tangent-Specific Routing Map**
+- Explicit domain ownership: Electron main (Rusty), Status engine (Rusty), SDK/IPC/preload/ACP (Linus), React/xterm UI (Livingston), Testing/E2E (Basher), Architecture/review (Danny), Deep second opinion (Turk)
+- Technology layer map with primary/secondary owners eliminates "who owns this?" questions
+- Captured Tangent packaging constraints: `npm run build` + `npx electron-builder --dir --config.npmRebuild=false` required for exe, `npmRebuild=false` is mandatory due to ffi-napi MSBuild env issue
+- E2E regression hook strategy: `general.spec.ts` (≤5 stable tests) + `specific.spec.ts` (rewrite for most recent fix)
+
+**Decision: Process Ceremonies for Quality Gates**
+- Pre-Flight Baseline: Run tests before starting work to establish clean baseline (prevents "was it already broken?")
+- Per-Task Gate: Build + test after every code change, update `specific.spec.ts`, check hook report
+- Packaging Smoke Gate: Full exe build + manual launch smoke test before delivery (critical — `npm run build` alone doesn't update exe)
+- Process Hygiene Sweep: End-of-session cleanup (git status, temp files, debug code removal)
+- Trade-off: 2-5 min ceremony overhead vs. catching regressions/packaging failures before delivery
+
+**Architectural Insight — Model Diversity as Insurance:**
+When all agents use same model family (Anthropic Claude), they share blind spots. A monoculture can miss entire classes of bugs or architectural flaws that a different model (OpenAI GPT) would catch. Turk as gpt-5.5 reviewer acts as architectural insurance — expensive per-use, but prevents catastrophic groupthink on critical decisions. Cost-justify via rarity: if invoked <5% of reviews, total cost impact is negligible vs. risk mitigation value.
+
+**Key Insight — Squad-First Reflex Prevents Coordinator Overwork:**
+FC2 analysis showed coordinators doing specialist work (writing code, running tests) when specialists exist. Root cause: no forcing function to check "should I route this?" before acting. Squad-First Reflex as automatic pre-response checklist shifts default from "do" to "route", improving velocity (parallel work) and quality (specialists handle their domains).
+
+**Reusable Pattern — Packaging Smoke Gate:**
+For Electron apps, `npm run build` compiles source but doesn't update the packaged exe. Users run the exe, not `out/main/index.js`. Smoke gate (build → electron-builder → manual launch → smoke test) catches packaging-only failures that unit/E2E tests miss. Generalizes to any deployment where build artifact ≠ test artifact.
+
 ### 2026-04-18 — Explode Overlap: THE REAL Root Cause (after 2 prior misses)
 
 **Root cause (FINAL):** The **main Tangent window is never part of the tile grid.** Explode only moves popout windows. The main window (600×400 minSize, default ~1200×800, default position near centre) sits in the middle of the screen and visually overlaps every popout underneath it. Brady's screenshot of "overlap" was popouts-behind-main, not popouts-vs-popouts.
@@ -408,3 +478,56 @@ Root cause: PopoutWindowShell hardcoded fontSize={14}. Fix: load config.fontSize
 **Tests:** 32/32 tiling unit, 92/92 shared unit, e2e green (main bounds unchanged; 17 popouts non-overlapping with main).
 
 **Commits:** 2b26208 (explode), 444e945 (font).
+
+### 2026-05-06 — FC2 Squad Comparison & Governance Upgrade Recommendations
+
+**Task:** Compare Tangent squad structure with D:\git\fc2 squad and provide prioritized recommendations for squad governance upgrade.
+
+**Deliverable:** `.squad/decisions/inbox/danny-fc2-squad-comparison.md`
+
+**Analysis:**
+- Tangent squad baseline: coordinator + 8 specialist agents (Danny, Livingston, Basher, Rusty, Ralph, Linus, Turk, Scribe)
+- FC2 squad structure: Similar model — coordinator + agents + model diversity strategy
+- Both use append-only squad files (decisions.md, history.md) with union merge rules
+- Both have Turk as on-demand escalation reviewer
+
+**Recommendations Documented (in priority order):**
+1. **Formalize Turk as model-diverse reviewer** — Activate on Danny rejection + re-rejection OR explicit coordinator escalation. Provides non-Anthropic perspective (GPT-5.5) when sonnet-based agents disagree on architecture.
+2. **Codify Squad-First Reflex in Coordinator routing** — Document explicit checklist: (1) Is there a specialist? Route to them. (2) Can agents work in parallel? Spawn all as background. (3) Simple fact? Answer directly.
+3. **Implement cost-optimized model policy** — Default code agents (Danny, Rusty, Linus, Livingston, Basher) to `claude-sonnet-4.5` (handles 95% of routine work at reasonable cost). Logging/monitoring (Scribe, Ralph) use `claude-haiku-4.5`. Escalations only (Turk) use `gpt-5.5`.
+4. **Upgrade team.md documentation** — Add `## Model Policy` section documenting baseline, logging tier, and escalation strategy.
+
+**Key Insights:**
+- Cost vs. monoculture trade-off: Sonnet baseline minimizes cost, but gpt-5.5-only escalation prevents model monoculture risk
+- Squad-First Reflex prevents coordinator from answering simple questions that a specialist could handle faster
+- Union merge rules are critical for parallel async agent work — already in place via .gitattributes
+
+**Status:** Recommendations written to `.squad/decisions/inbox/danny-fc2-squad-comparison.md` for user/coordinator review before merge to squad decisions.
+
+**Next Phase:** (Deferred) Implement squad governance upgrade including team.md updates, model policy enforcement, and Turk activation workflow in follow-up session.
+
+### 2026-05-06 — Forge Chat Foundry Agent PoC Plan
+
+**Deliverable:** `.squad/decisions/inbox/danny-forge-chat-foundry-poc-next-step.md` → merged to `.squad/decisions.md`
+
+**Decision:** Adopt Linus's legacy FC research as the next PoC step: build a TypeScript main-process Foundry connector that lists agents and streams one `insights-agent` turn using local `az login` / `AzureCliCredential`.
+
+**Key learnings:**
+- Legacy FC's App Insights path is not bespoke; it invokes the Foundry `insights-agent` with the same `agent_reference` Responses API path as every other agent.
+- Copy the protocol contract (`agent_reference`, AG-UI event names/semantics), but avoid copying the Python Starlette host, Cosmos persistence, and Easy Auth/OBO machinery into the first milestone.
+- Auth is the architectural fork: local CLI credentials prove the integration, but production must decide desktop-native MSAL vs hosted Easy Auth/OBO before we port legacy auth.
+
+**Team routing (team consensus ready):**
+- **Linus:** connector (listAgents + streamRun smoke test), AG-UI event translation
+- **Rusty:** SDK parity (TS `@azure/ai-projects` vs raw HTTPS fallback)
+- **Livingston:** IPC seam + thin renderer (once connector smoke test passes)
+- **Basher:** tests, error modes, cancellation
+- **Danny:** hosted auth design spike after PoC (desktop MSAL vs server Easy Auth/OBO decision)
+
+**Scope (intentionally boring first milestone):**
+- No UI, no Easy Auth, no Cosmos, no GitHub OAuth, no multi-project registry
+- Local only (AzureCliCredential)
+- Target: Anvil INT project
+- Success: connector lists agents including `insights-agent`, streams one prompt, emits AG-UI events, emits at least one Insights MCP tool call
+
+**Known unknowns handled upfront:** TS SDK parity, Anvil INT access, `insights-agent` availability, cancellation propagation, production auth shape. Validation checklist in decisions.md covers all 12 criteria.
